@@ -42,6 +42,7 @@ After base templates are created (regardless of whether SSH or Ansible mode was 
 - **Scripts/**
   - **build.sh**: Central orchestration script supporting interactive and CLI modes:
   - **proxmox.sh**: Executed on Proxmox host to create base templates. Accepts CLI parameters:
+  - **test.sh**: Pre-release end-to-end test. Builds templates in an isolated 88xxx VMID range using both of build.sh's configuration methods, boots each image to prove it works, then deletes everything. See [Pre-Release Testing](#pre-release-testing).
 
 - **Packer/**
   - **Templates/**: 
@@ -429,6 +430,59 @@ If using Packer customization, customized VMs get base VMID + 100 (e.g., Debian 
 - Ubuntu 25.04
 - Fedora 42
 - Fedora 43
+
+## Pre-Release Testing
+
+`Scripts/test.sh` validates that the whole pipeline still works before you cut a
+release. It runs against a real Proxmox host and:
+
+1. Builds the selected templates with **build.sh in variable (CLI argument) mode**, verifies each template was created, **boots it**, then deletes it.
+2. Repeats the build with **build.sh in answerfile mode**, verifies, boots, and deletes.
+
+All test resources use an isolated **88xxx VMID range** (default base `88000`) so
+they never collide with your production templates, and they are destroyed when the
+run finishes (even on failure).
+
+### How boot validation works
+
+build.sh produces *templates*, which are never powered on. To catch images that
+build but fail to boot, the test full-clones each finished template to a temporary
+VM, starts it, and waits for the **QEMU guest agent** to answer (`qm agent <id>
+ping`). The agent only responds once the OS has fully booted, so a successful ping
+is concrete proof the image boots. The temporary clone is then destroyed.
+
+### Requirements
+
+- SSH (or `--local`) access to a Proxmox host where `qm` is available.
+- `sshpass` on the machine running the test when using password authentication.
+- Templates already ship with `qemu-guest-agent` (created by `proxmox.sh`), which the boot check relies on.
+
+### Usage
+
+```bash
+# Test a single distro in both modes (recommended first run)
+./Scripts/test.sh \
+  --proxmox-host=pve.local \
+  --proxmox-ssh-password=secret \
+  --proxmox-storage=local-lvm \
+  --build-distros=debian12
+
+# Full pre-release run across all distros, including Packer-customized templates
+./Scripts/test.sh \
+  --proxmox-host=pve.local \
+  --proxmox-ssh-password=secret \
+  --proxmox-storage=local-lvm \
+  --build-distros=all \
+  --run-packer \
+  --packer-token-id="user@pam!packer" \
+  --packer-token-secret="your_api_token_secret"
+```
+
+Connection settings can also come from `.env.local` or `PACT_*` environment
+variables (same names build.sh uses); CLI arguments take precedence. Useful flags:
+`--mode=variable|answerfile|both`, `--vmid-base=NUM`, `--boot-timeout=SEC`, and
+`--keep` (leave resources in place for debugging). The script exits non-zero if any
+template fails to build or boot, so it can gate a release.
 
 ## Links
 
