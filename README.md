@@ -484,6 +484,29 @@ variables (same names build.sh uses); CLI arguments take precedence. Useful flag
 `--keep` (leave resources in place for debugging). The script exits non-zero if any
 template fails to build or boot, so it can gate a release.
 
+### Continuous Integration
+
+Static checks that don't need a Proxmox host run automatically in GitHub Actions
+(`.github/workflows/ci.yml`) on every push, pull request, and `v*` tag:
+
+- **ShellCheck** on `Scripts/*.sh` (config in `.shellcheckrc`)
+- **Packer** `fmt -check`, `init`, and `validate` for every distro (the distro list is read from `proxmox.sh`, so new distros are covered automatically)
+- **yamllint** + **`ansible-playbook --syntax-check`** on the Ansible files (config in `.yamllint`)
+
+These catch broken scripts, malformed Packer/Ansible changes, and a distro added
+to one place but not another, before a release. The end-to-end build + boot test
+(`Scripts/test.sh`) is not part of CI because it requires a live Proxmox host;
+run it manually as the final pre-release gate.
+
+You can reproduce the CI checks locally:
+
+```bash
+shellcheck Scripts/*.sh
+packer fmt -check Packer/Templates/universal.pkr.hcl
+yamllint Ansible/
+ansible-playbook --syntax-check -i localhost, Ansible/Playbooks/image_customizations.yml
+```
+
 ## Links
 
 - [Packer Documentation](https://www.packer.io/docs)

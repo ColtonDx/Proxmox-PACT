@@ -1,0 +1,16 @@
+# yamllint configuration for Proxmox-P.A.C.T.
+#
+# Relaxes purely-stylistic rules that conflict with the existing Ansible file
+# style (deeper module-argument indentation, longer comment lines, "yes"/"no"
+# booleans) while keeping the hygiene rules that catch real problems: trailing
+# whitespace, missing end-of-file newline, key duplication, and YAML syntax.
+extends: relaxed
+
+rules:
+  line-length: disable
+  indentation: disable
+  comments-indentation: disable
+  document-start: disable
+  truthy: disable
+  trailing-spaces: enable
+  new-line-at-end-of-file: enable

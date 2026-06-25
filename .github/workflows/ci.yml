@@ -1,0 +1,67 @@
+name: CI
+
+# Static pre-release checks that need no Proxmox host: shell linting, Packer
+# template validation, and Ansible/YAML linting. The full build + boot test
+# (Scripts/test.sh) still runs manually against a real Proxmox host.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  shellcheck:
+    name: ShellCheck (bash scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run ShellCheck
+        # shellcheck is preinstalled on GitHub-hosted runners and reads .shellcheckrc
+        run: shellcheck Scripts/*.sh
+
+  packer:
+    name: Packer (fmt + validate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-packer@main
+        with:
+          version: 1.11.2
+      - name: packer fmt -check
+        run: packer fmt -check -diff Packer/Templates/universal.pkr.hcl
+      - name: packer init
+        run: packer init Packer/Templates/universal.pkr.hcl
+      - name: packer validate (every distro)
+        run: |
+          set -euo pipefail
+          # Derive the distro list from proxmox.sh so new distros are covered automatically.
+          distros=$(grep -oE '^[[:space:]]*"[a-z0-9]+\|' Scripts/proxmox.sh | tr -d ' "|')
+          for d in $distros; do
+            echo "::group::validate $d"
+            packer validate \
+              -var "distro=$d" \
+              -var "proxmox_api_url=https://example.invalid:8006/api2/json" \
+              -var "proxmox_api_token_id=ci@pam!tok" \
+              -var "proxmox_api_token_secret=00000000-0000-0000-0000-000000000000" \
+              -var "proxmox_target_node=pve" \
+              -var "proxmox_storage=local-lvm" \
+              -var "vmid=999" \
+              Packer/Templates/universal.pkr.hcl
+            echo "::endgroup::"
+          done
+
+  ansible:
+    name: Ansible / YAML lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Install linters
+        run: pip install --quiet yamllint ansible-core
+      - name: yamllint
+        run: yamllint Ansible/
+      - name: ansible-playbook --syntax-check
+        run: ansible-playbook --syntax-check -i localhost, Ansible/Playbooks/image_customizations.yml
