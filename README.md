@@ -489,7 +489,7 @@ template fails to build or boot, so it can gate a release.
 Static checks that don't need a Proxmox host run automatically in GitHub Actions
 (`.github/workflows/ci.yml`) on every push, pull request, and `v*` tag:
 
-- **ShellCheck** on `Scripts/*.sh` (config in `.shellcheckrc`)
+- **ShellCheck** on `Scripts/*.sh` (the scripts are clean under ShellCheck's default rules)
 - **Packer** `fmt -check`, `init`, and `validate` for every distro (the distro list is read from `proxmox.sh`, so new distros are covered automatically)
 - **yamllint** + **`ansible-playbook --syntax-check`** on the Ansible files (config in `.yamllint`)
 

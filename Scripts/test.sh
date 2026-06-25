@@ -370,29 +370,26 @@ final_vmids_for() {
 # Build in VARIABLE mode: everything passed as CLI arguments / env to build.sh.
 # --answerfile-path=/dev/null prevents build.sh from picking up a stray .env.local.
 build_variable_mode() {
-    local auth_arg local_arg="" packer_args=""
+    local build_args=(
+        --answerfile-path=/dev/null
+        --proxmox-host="$PROXMOX_HOST"
+        --proxmox-ssh-user="$PROXMOX_SSH_USER"
+        --proxmox-storage="$PROXMOX_STORAGE"
+        --proxmox-target-node="$PROXMOX_TARGET_NODE"
+        --build-distros="$BUILD_DISTROS"
+        --rebuild-templates
+    )
     if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
-        auth_arg="--ssh-private-key-path=$SSH_PRIVATE_KEY_PATH"
+        build_args+=("--ssh-private-key-path=$SSH_PRIVATE_KEY_PATH")
     else
-        auth_arg="--proxmox-ssh-password=$PROXMOX_SSH_PASSWORD"
+        build_args+=("--proxmox-ssh-password=$PROXMOX_SSH_PASSWORD")
     fi
-    [ "$PROXMOX_IS_REMOTE" = false ] && local_arg="--local"
+    [ "$PROXMOX_IS_REMOTE" = false ] && build_args+=("--local")
     if [ "$RUN_PACKER" = true ]; then
-        packer_args="--run-packer --packer-token-id=$PACKER_TOKEN_ID --packer-token-secret=$PACKER_TOKEN_SECRET"
+        build_args+=("--run-packer" "--packer-token-id=$PACKER_TOKEN_ID" "--packer-token-secret=$PACKER_TOKEN_SECRET")
     fi
 
-    # $local_arg/$packer_args intentionally word-split into separate flags.
-    # shellcheck disable=SC2086
-    ( cd "$REPO_ROOT" && PACT_VMID_BASE="$TEST_VMID_BASE" ./Scripts/build.sh \
-        --answerfile-path=/dev/null \
-        --proxmox-host="$PROXMOX_HOST" \
-        --proxmox-ssh-user="$PROXMOX_SSH_USER" \
-        "$auth_arg" \
-        --proxmox-storage="$PROXMOX_STORAGE" \
-        --proxmox-target-node="$PROXMOX_TARGET_NODE" \
-        --build-distros="$BUILD_DISTROS" \
-        --rebuild-templates \
-        $local_arg $packer_args )
+    ( cd "$REPO_ROOT" && PACT_VMID_BASE="$TEST_VMID_BASE" ./Scripts/build.sh "${build_args[@]}" )
 }
 
 # Build in ANSWERFILE mode: write a temp answerfile and let build.sh source it.

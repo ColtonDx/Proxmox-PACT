@@ -127,7 +127,7 @@ else
             SELECTED_DISTROS="${SELECTED_DISTROS} ${DISTRO_GROUPS[$item]}"
         else
             # Check if it's a valid individual distro ID
-            if [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2504 fedora42 fedora43 " =~ " $item " ]]; then
+            if [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2504 fedora42 fedora43 " == *" $item "* ]]; then
                 SELECTED_DISTROS="${SELECTED_DISTROS} $item"
             else
                 echo "Warning: unknown build item '$item' - ignoring" >&2
@@ -214,7 +214,7 @@ for distro_config in "${DISTRO_METADATA[@]}"; do
     IFS='|' read -r distro_id distro_name offset filename url <<< "$distro_config"
     
     # Check if this distro was selected for building
-    if [[ ! " $SELECTED_DISTROS " =~ " $distro_id " ]]; then
+    if [[ " $SELECTED_DISTROS " != *" $distro_id "* ]]; then
         continue
     fi
     

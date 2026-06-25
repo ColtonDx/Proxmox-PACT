@@ -258,6 +258,7 @@ CONFIG_FILE_EXPANDED="${ANSWERFILE_PATH:-.env.local}"
 CONFIG_FILE_EXPANDED="${CONFIG_FILE_EXPANDED/#\~/$HOME}"
 if [ -f "$CONFIG_FILE_EXPANDED" ]; then
     echo "Loading configuration from $CONFIG_FILE_EXPANDED..."
+    # shellcheck source=/dev/null
     source "$CONFIG_FILE_EXPANDED"
 fi
 
@@ -326,7 +327,7 @@ if [ "$INTERACTIVE_MODE" = true ]; then
                 if [ -n "${DISTRO_GROUPS[$it]}" ]; then
                     # It's a group
                     SELECTED_DISTROS="${SELECTED_DISTROS} ${DISTRO_GROUPS[$it]}"
-                elif [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2504 fedora42 fedora43 " =~ " $it " ]]; then
+                elif [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2504 fedora42 fedora43 " == *" $it "* ]]; then
                     # Valid individual distro
                     SELECTED_DISTROS="${SELECTED_DISTROS} $it"
                 else
@@ -409,7 +410,7 @@ if [ "$INTERACTIVE_MODE" = true ]; then
     
     for distro_entry in "${DISTRO_METADATA[@]}"; do
         IFS='|' read -r distro_id distro_name offset <<< "$distro_entry"
-        if [[ " $SELECTED_DISTROS " =~ " $distro_id " ]]; then
+        if [[ " $SELECTED_DISTROS " == *" $distro_id "* ]]; then
             SELECTED_VMIDS+=("$((VMID_BASE + offset))")
             if [ "$RUN_PACKER" = true ]; then
                 PACKER_VMIDS+=("$((VMID_BASE + 100 + offset))")
@@ -490,7 +491,7 @@ if [ -n "$BUILD_DISTROS" ]; then
             if [ -n "${DISTRO_GROUPS[$item]}" ]; then
                 # It's a group (debian, ubuntu, fedora, etc.)
                 SELECTED_DISTROS="${SELECTED_DISTROS} ${DISTRO_GROUPS[$item]}"
-            elif [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2504 fedora42 fedora43 " =~ " $item " ]]; then
+            elif [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2504 fedora42 fedora43 " == *" $item "* ]]; then
                 # It's a valid individual distro
                 SELECTED_DISTROS="${SELECTED_DISTROS} $item"
                 else
@@ -552,22 +553,23 @@ resolve_file_reference() {
         local temp_file="/tmp/pact_${name}_$$.tmp"
         echo "Downloading $name from URL: $ref" >&2
         
+        local download_ok=true
         if command -v curl &> /dev/null; then
-            curl -fsSL -o "$temp_file" "$ref"
+            curl -fsSL -o "$temp_file" "$ref" || download_ok=false
         elif command -v wget &> /dev/null; then
-            wget -q -O "$temp_file" "$ref"
+            wget -q -O "$temp_file" "$ref" || download_ok=false
         else
             echo "Error: Neither curl nor wget found to download $name from URL" >&2
             return 1
         fi
-        
-        if [ $? -ne 0 ]; then
+
+        if [ "$download_ok" = false ]; then
             echo "Error: Failed to download $name from $ref" >&2
             return 1
         fi
-        
+
         # Trap to clean up temp file on exit
-        trap "rm -f $temp_file" EXIT
+        trap 'rm -f "$temp_file"' EXIT
         echo "$temp_file"
     else
         # It's a local path - validate it exists
@@ -586,7 +588,7 @@ start_packer() {
         IFS='|' read -r distro_id distro_name offset <<< "$distro_entry"
         
         # Check if this distro was selected
-        if [[ ! " $SELECTED_DISTROS " =~ " $distro_id " ]]; then
+        if [[ " $SELECTED_DISTROS " != *" $distro_id "* ]]; then
             continue
         fi
         
@@ -605,30 +607,26 @@ packer_build() {
     local ansiblevarfile="${CUSTOM_ANSIBLE_VARFILE:-./Ansible/Variables/vars.yml}"
     
     # Resolve packerfile (handle URLs and paths)
-    packerfile=$(resolve_file_reference "$packerfile" "Packer template")
-    if [ $? -ne 0 ]; then
+    if ! packerfile=$(resolve_file_reference "$packerfile" "Packer template"); then
         return 1
     fi
-    
+
     # Resolve ansiblefile (handle URLs and paths)
-    ansiblefile=$(resolve_file_reference "$ansiblefile" "Ansible playbook")
-    if [ $? -ne 0 ]; then
+    if ! ansiblefile=$(resolve_file_reference "$ansiblefile" "Ansible playbook"); then
         return 1
     fi
-    
+
     # Resolve ansiblevarfile (handle URLs and paths)
-    ansiblevarfile=$(resolve_file_reference "$ansiblevarfile" "Ansible variables file")
-    if [ $? -ne 0 ]; then
+    if ! ansiblevarfile=$(resolve_file_reference "$ansiblevarfile" "Ansible variables file"); then
         return 1
     fi
-    
-    packer init "$packerfile"
-    if [ $? -ne 0 ]; then
+
+    if ! packer init "$packerfile"; then
         echo "Error: Packer init failed" >&2
         return 1
     fi
-    
-    packer build \
+
+    if ! packer build \
         -var "proxmox_target_node=$PROXMOX_TARGET_NODE" \
         -var "proxmox_api_url=https://${PROXMOX_HOST}:8006/api2/json" \
         -var "proxmox_api_token_id=$PACKER_TOKEN_ID" \
@@ -638,9 +636,7 @@ packer_build() {
         -var "distro=$distro_id" \
         -var "ansible_playbook=$ansiblefile" \
         -var "ansible_varfile=$ansiblevarfile" \
-        "$packerfile"
-    
-    if [ $? -ne 0 ]; then
+        "$packerfile"; then
         echo "Error: Packer build failed for $distro_name" >&2
         return 1
     fi
@@ -648,6 +644,7 @@ packer_build() {
 
 # Detect the distribution of the runner
 if [ -f /etc/os-release ]; then
+    # shellcheck source=/dev/null
     . /etc/os-release
     OS=$ID
 else
@@ -670,7 +667,7 @@ if [ "$PROXMOX_IS_REMOTE" = true ]; then
     fi
 
     # Check which packages are already installed
-    PACKAGES_TO_INSTALL=""
+    PACKAGES_TO_INSTALL=()
     for pkg in $PACKAGES; do
         pkg_installed=false
         
@@ -703,33 +700,30 @@ if [ "$PROXMOX_IS_REMOTE" = true ]; then
         fi
         
         if [ "$pkg_installed" = false ]; then
-            PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
+            PACKAGES_TO_INSTALL+=("$pkg")
         fi
     done
 
     # Only install if there are packages to install
-    if [ -n "$PACKAGES_TO_INSTALL" ]; then
-        echo "Installing required packages:$PACKAGES_TO_INSTALL"
+    if [ "${#PACKAGES_TO_INSTALL[@]}" -gt 0 ]; then
+        echo "Installing required packages: ${PACKAGES_TO_INSTALL[*]}"
         case "$OS" in
             ubuntu|debian)
                 sudo apt-get update > /dev/null 2>&1
-                sudo apt-get install -y $PACKAGES_TO_INSTALL
-                if [ $? -ne 0 ]; then
-                    echo "Error: Failed to install packages. Please install manually:$PACKAGES_TO_INSTALL" >&2
+                if ! sudo apt-get install -y "${PACKAGES_TO_INSTALL[@]}"; then
+                    echo "Error: Failed to install packages. Please install manually: ${PACKAGES_TO_INSTALL[*]}" >&2
                     exit 1
                 fi
                 ;;
             centos|rocky|almalinux|fedora|rhel)
-                sudo dnf install -y $PACKAGES_TO_INSTALL
-                if [ $? -ne 0 ]; then
-                    echo "Error: Failed to install packages. Please install manually:$PACKAGES_TO_INSTALL" >&2
+                if ! sudo dnf install -y "${PACKAGES_TO_INSTALL[@]}"; then
+                    echo "Error: Failed to install packages. Please install manually: ${PACKAGES_TO_INSTALL[*]}" >&2
                     exit 1
                 fi
                 ;;
             opensuse|sles)
-                sudo zypper install -y $PACKAGES_TO_INSTALL
-                if [ $? -ne 0 ]; then
-                    echo "Error: Failed to install packages. Please install manually:$PACKAGES_TO_INSTALL" >&2
+                if ! sudo zypper install -y "${PACKAGES_TO_INSTALL[@]}"; then
+                    echo "Error: Failed to install packages. Please install manually: ${PACKAGES_TO_INSTALL[*]}" >&2
                     exit 1
                 fi
                 ;;
@@ -777,21 +771,21 @@ fi
 # Run proxmox.sh to create templates (SSH to remote or run locally)
 if [ "$PROXMOX_IS_REMOTE" = true ]; then
     # Build proxmox.sh arguments based on configuration
-    PROXMOX_SCRIPT_ARGS="--vmid-base=$VMID_BASE --proxmox-storage=$PROXMOX_STORAGE"
+    PROXMOX_SCRIPT_ARGS=("--vmid-base=$VMID_BASE" "--proxmox-storage=$PROXMOX_STORAGE")
     
     # Add rebuild flag if enabled
     if [ "$REBUILD_TEMPLATES" = true ]; then
-        PROXMOX_SCRIPT_ARGS="$PROXMOX_SCRIPT_ARGS --rebuild-templates"
+        PROXMOX_SCRIPT_ARGS+=("--rebuild-templates")
     fi
     
     # Add run-packer flag if Packer will be run
     if [ "$RUN_PACKER" = true ]; then
-        PROXMOX_SCRIPT_ARGS="$PROXMOX_SCRIPT_ARGS --run-packer"
+        PROXMOX_SCRIPT_ARGS+=("--run-packer")
     fi
     
     # Add build list to arguments
     if [ -n "$BUILD_DISTROS" ]; then
-        PROXMOX_SCRIPT_ARGS="$PROXMOX_SCRIPT_ARGS --build=$BUILD_DISTROS"
+        PROXMOX_SCRIPT_ARGS+=("--build=$BUILD_DISTROS")
     fi
     
     # Determine if using key-based authentication
@@ -805,27 +799,29 @@ if [ "$PROXMOX_IS_REMOTE" = true ]; then
         fi
         
         # Create unique working directory on remote host
-        ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no $PROXMOX_SSH_USER@"$PROXMOX_HOST" mkdir -p "./$WORK_DIR_NAME"
-        
-        scp -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no ./Scripts/proxmox.sh $PROXMOX_SSH_USER@$PROXMOX_HOST:"./$WORK_DIR_NAME"
+        ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" mkdir -p "./$WORK_DIR_NAME"
+
+        scp -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no ./Scripts/proxmox.sh "$PROXMOX_SSH_USER@$PROXMOX_HOST:./$WORK_DIR_NAME"
         # SSH to the remote host and run proxmox.sh with arguments
-        ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no $PROXMOX_SSH_USER@"$PROXMOX_HOST" << EOF
+        # shellcheck disable=SC2087  # heredoc is expanded locally on purpose to inject the build args
+        ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" << EOF
         chmod +x ./$WORK_DIR_NAME/proxmox.sh
-        ./$WORK_DIR_NAME/proxmox.sh $PROXMOX_SCRIPT_ARGS
+        ./$WORK_DIR_NAME/proxmox.sh ${PROXMOX_SCRIPT_ARGS[*]}
         rm -rf ./$WORK_DIR_NAME
 EOF
     else
         # Using password authentication
         echo "Starting build using password authentication"
         # Create unique working directory on remote host
-        sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $PROXMOX_SSH_USER@$PROXMOX_HOST mkdir -p "./$WORK_DIR_NAME"
-        
+        sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" mkdir -p "./$WORK_DIR_NAME"
+
         # Copy files to the remote host
-        sshpass -p "$PROXMOX_SSH_PASSWORD" scp -o StrictHostKeyChecking=no ./Scripts/proxmox.sh $PROXMOX_SSH_USER@$PROXMOX_HOST:"./$WORK_DIR_NAME"
+        sshpass -p "$PROXMOX_SSH_PASSWORD" scp -o StrictHostKeyChecking=no ./Scripts/proxmox.sh "$PROXMOX_SSH_USER@$PROXMOX_HOST:./$WORK_DIR_NAME"
         # SSH to the remote host and run proxmox.sh with arguments
-        sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $PROXMOX_SSH_USER@$PROXMOX_HOST << EOF
+        # shellcheck disable=SC2087  # heredoc is expanded locally on purpose to inject the build args
+        sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" << EOF
         chmod +x ./$WORK_DIR_NAME/proxmox.sh
-        ./$WORK_DIR_NAME/proxmox.sh $PROXMOX_SCRIPT_ARGS
+        ./$WORK_DIR_NAME/proxmox.sh ${PROXMOX_SCRIPT_ARGS[*]}
         rm -rf ./$WORK_DIR_NAME
 EOF
     fi
@@ -834,19 +830,19 @@ else
     echo "Running proxmox.sh locally..."
     
     # Build proxmox.sh arguments
-    PROXMOX_SCRIPT_ARGS="--vmid-base=$VMID_BASE --proxmox-storage=$PROXMOX_STORAGE"
+    PROXMOX_SCRIPT_ARGS=("--vmid-base=$VMID_BASE" "--proxmox-storage=$PROXMOX_STORAGE")
     
     if [ "$REBUILD_TEMPLATES" = true ]; then
-        PROXMOX_SCRIPT_ARGS="$PROXMOX_SCRIPT_ARGS --rebuild-templates"
+        PROXMOX_SCRIPT_ARGS+=("--rebuild-templates")
     fi
     
     if [ "$RUN_PACKER" = true ]; then
-        PROXMOX_SCRIPT_ARGS="$PROXMOX_SCRIPT_ARGS --run-packer"
+        PROXMOX_SCRIPT_ARGS+=("--run-packer")
     fi
     
     # Add build list to arguments
     if [ -n "$BUILD_DISTROS" ]; then
-        PROXMOX_SCRIPT_ARGS="$PROXMOX_SCRIPT_ARGS --build=$BUILD_DISTROS"
+        PROXMOX_SCRIPT_ARGS+=("--build=$BUILD_DISTROS")
     fi
     
     # Create unique local working directory and run
@@ -854,7 +850,7 @@ else
     cp ./Scripts/proxmox.sh "./$WORK_DIR_NAME/"
     chmod +x "./$WORK_DIR_NAME/proxmox.sh"
     
-    "./$WORK_DIR_NAME/proxmox.sh" $PROXMOX_SCRIPT_ARGS
+    "./$WORK_DIR_NAME/proxmox.sh" "${PROXMOX_SCRIPT_ARGS[@]}"
     
     # Cleanup working directory
     rm -rf "./$WORK_DIR_NAME"
@@ -863,8 +859,7 @@ fi
 # Run Packer if enabled
 if [ "$RUN_PACKER" = true ]; then
     echo "Running Packer builds..."
-    start_packer
-    if [ $? -ne 0 ]; then
+    if ! start_packer; then
         echo "Error: Packer build failed" >&2
         exit 1
     fi
@@ -882,7 +877,7 @@ if [ "$RUN_PACKER" = true ]; then
         IFS='|' read -r distro_id distro_name offset <<< "$distro_entry"
         
         # Check if this distro was selected
-        if [[ ! " $SELECTED_DISTROS " =~ " $distro_id " ]]; then
+        if [[ " $SELECTED_DISTROS " != *" $distro_id "* ]]; then
             continue
         fi
         
@@ -892,9 +887,9 @@ if [ "$RUN_PACKER" = true ]; then
         # If remote, execute qm destroy on the remote host
         if [ "$PROXMOX_IS_REMOTE" = true ]; then
             if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
-                ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no $PROXMOX_SSH_USER@"$PROXMOX_HOST" qm destroy "$vmid" 2>/dev/null || true
+                ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" qm destroy "$vmid" 2>/dev/null || true
             else
-                sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $PROXMOX_SSH_USER@$PROXMOX_HOST qm destroy "$vmid" 2>/dev/null || true
+                sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" qm destroy "$vmid" 2>/dev/null || true
             fi
         else
             # Local execution
