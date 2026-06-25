@@ -129,7 +129,7 @@ declare -a DISTRO_METADATA=(
     "debian13|Debian-13|3"
     "ubuntu2204|Ubuntu-22.04|11"
     "ubuntu2404|Ubuntu-24.04|12"
-    "ubuntu2504|Ubuntu-25.04|13"
+    "ubuntu2604|Ubuntu-26.04|14"
     "fedora42|Fedora-42|22"
     "fedora43|Fedora-43|23"
 )
@@ -137,9 +137,9 @@ declare -a DISTRO_METADATA=(
 # Map of distro groups to their individual IDs
 declare -A DISTRO_GROUPS=(
     [debian]="debian11 debian12 debian13"
-    [ubuntu]="ubuntu2204 ubuntu2404 ubuntu2504"
+    [ubuntu]="ubuntu2204 ubuntu2404 ubuntu2604"
     [fedora]="fedora42 fedora43"
-    [all]="debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2504 fedora42 fedora43"
+    [all]="debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2604 fedora42 fedora43"
 )
 
 # Selected distros to build (space-separated list of distro IDs)
@@ -302,7 +302,7 @@ if [ "$INTERACTIVE_MODE" = true ]; then
     
     # Q1: Ask which images to build
     echo "Select distros to create templates from:"
-    echo "  Available: all, debian, ubuntu, fedora, debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2504, fedora42, fedora43"
+    echo "  Available: all, debian, ubuntu, fedora, debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora42, fedora43"
     
     # Keep asking until valid input is provided
     BUILD_VALID=false
@@ -327,7 +327,7 @@ if [ "$INTERACTIVE_MODE" = true ]; then
                 if [ -n "${DISTRO_GROUPS[$it]}" ]; then
                     # It's a group
                     SELECTED_DISTROS="${SELECTED_DISTROS} ${DISTRO_GROUPS[$it]}"
-                elif [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2504 fedora42 fedora43 " == *" $it "* ]]; then
+                elif [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2604 fedora42 fedora43 " == *" $it "* ]]; then
                     # Valid individual distro
                     SELECTED_DISTROS="${SELECTED_DISTROS} $it"
                 else
@@ -337,7 +337,7 @@ if [ "$INTERACTIVE_MODE" = true ]; then
             
             if [ -n "$INVALID_ITEMS" ]; then
                 echo "Error: Unknown distro(s):$INVALID_ITEMS"
-                echo "Valid options: all, debian, ubuntu, fedora, debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2504, fedora42, fedora43"
+                echo "Valid options: all, debian, ubuntu, fedora, debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora42, fedora43"
             else
                 # Remove duplicates
                 SELECTED_DISTROS="$(echo "$SELECTED_DISTROS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)"
@@ -491,12 +491,12 @@ if [ -n "$BUILD_DISTROS" ]; then
             if [ -n "${DISTRO_GROUPS[$item]}" ]; then
                 # It's a group (debian, ubuntu, fedora, etc.)
                 SELECTED_DISTROS="${SELECTED_DISTROS} ${DISTRO_GROUPS[$item]}"
-            elif [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2504 fedora42 fedora43 " == *" $item "* ]]; then
+            elif [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2604 fedora42 fedora43 " == *" $item "* ]]; then
                 # It's a valid individual distro
                 SELECTED_DISTROS="${SELECTED_DISTROS} $item"
                 else
                     echo "Error: Unknown template '$item'" >&2
-                    echo "Valid options: all, debian, ubuntu, fedora, debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2504, fedora42, fedora43" >&2
+                    echo "Valid options: all, debian, ubuntu, fedora, debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora42, fedora43" >&2
                 exit 1
             fi
         done

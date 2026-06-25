@@ -46,7 +46,7 @@ After base templates are created (regardless of whether SSH or Ansible mode was 
 
 - **Packer/**
   - **Templates/**: 
-    - **universal.pkr.hcl**: Universal template supporting all supported distros. Uses `distro` variable to configure behavior for: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2504, fedora42, fedora43
+    - **universal.pkr.hcl**: Universal template supporting all supported distros. Uses `distro` variable to configure behavior for: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora42, fedora43
 
 - **Ansible/**
   - **Playbooks/**: 
@@ -109,9 +109,9 @@ The **Interactive Mode** (`./Scripts/build.sh --interactive`) is the easiest way
 Choose which Linux distributions to create templates for. Options include:
 - `all` - Create templates for all supported distros
 - `debian` - All Debian versions (11, 12, 13)
-- `ubuntu` - All Ubuntu versions (22.04, 24.04, 25.04)
+- `ubuntu` - All Ubuntu versions (22.04, 24.04, 26.04)
 - `fedora` - All Fedora versions (41, 42)
-- Individual names: `debian11`, `debian12`, `debian13`, `ubuntu2204`, `ubuntu2404`, `ubuntu2504`, `fedora42`, `fedora43`
+- Individual names: `debian11`, `debian12`, `debian13`, `ubuntu2204`, `ubuntu2404`, `ubuntu2604`, `fedora42`, `fedora43`
 
 Example: `debian12,ubuntu2404,fedora43` to create only Debian 12, Ubuntu 24.04, and Fedora 43 templates
 
@@ -123,7 +123,7 @@ Choose whether to run the Packer customization phase after creating base templat
 #### 3. Base VMID
 Enter the starting VMID number for your templates (default: 800). The script will automatically assign sequential IDs based on distro offsets:
 - Debian 11-13: base+1, base+2, base+3
-- Ubuntu 22.04-25.04: base+11, base+12, base+13
+- Ubuntu 22.04/24.04/26.04: base+11, base+12, base+14
 If Packer is enabled, customized versions will use base+100 offset (e.g., 901, 902, 903 for Debian with Packer).
 
 #### 4. Is the Proxmox server remote?
@@ -391,7 +391,7 @@ ssh root@pve.local
 - `--vmid-base=NUM` - Starting VMID (default: 800)
 - `--proxmox-storage=NAME` - Storage pool name (default: local-lvm)
 - `--build=LIST` - Comma-separated distro names (default: all)
-  - Individual: `debian11`, `debian12`, `debian13`, `ubuntu2204`, `ubuntu2404`, `ubuntu2504`, `fedora42`, `fedora43`
+  - Individual: `debian11`, `debian12`, `debian13`, `ubuntu2204`, `ubuntu2404`, `ubuntu2604`, `fedora42`, `fedora43`
   - Groups: `debian` (all Debian), `ubuntu` (all Ubuntu)
   - Example: `--build=debian12,ubuntu2404,fedora42`
 - `--rebuild-templates` - Delete existing VMs at target VMIDs before building
@@ -414,7 +414,7 @@ VM template VMIDs follow this numbering scheme (with default nVMID=800):
 | Debian 13 | 803 |
 | Ubuntu 2204 | 811 |
 | Ubuntu 2404 | 812 |
-| Ubuntu 2504 | 813 |
+| Ubuntu 2604 | 814 |
 | Fedora 42 | 822 |
 | Fedora 43 | 823 |
 
@@ -427,7 +427,7 @@ If using Packer customization, customized VMs get base VMID + 100 (e.g., Debian 
 - Debian 13
 - Ubuntu 22.04
 - Ubuntu 24.04
-- Ubuntu 25.04
+- Ubuntu 26.04
 - Fedora 42
 - Fedora 43
 

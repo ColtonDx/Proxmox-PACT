@@ -23,13 +23,13 @@
 #   --help                      Display help message
 #
 # Distro Options:
-#   Individual: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2504, fedora42, fedora43
+#   Individual: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora42, fedora43
 #   Groups:     debian (all Debian versions), ubuntu (all Ubuntu versions), fedora (all Fedora versions)
 #   Special:    all (create all distros)
 #
 # VMIDs Assignment (with default VMID_BASE=800):
 #   debian11: 801,   debian12: 802,   debian13: 803
-#   ubuntu2204: 811, ubuntu2404: 812, ubuntu2504: 813
+#   ubuntu2204: 811, ubuntu2404: 812, ubuntu2604: 814
 #   fedora42: 822,   fedora43: 823
 #
 # If Packer is enabled (--run-packer), customized VMs get base+100 offset
@@ -60,7 +60,7 @@ declare -a DISTRO_METADATA=(
     "debian13|Debian-13|3|debian-13-template.qcow2|https://cloud.debian.org/images/cloud/trixie/daily/latest/debian-13-genericcloud-amd64-daily.qcow2"
     "ubuntu2204|Ubuntu-2204|11|ubuntu-2204-template.img|https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"
     "ubuntu2404|Ubuntu-2404|12|ubuntu-2404-template.img|https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
-    "ubuntu2504|Ubuntu-2504|13|ubuntu-2504-template.img|https://cloud-images.ubuntu.com/releases/plucky/release/ubuntu-25.04-server-cloudimg-amd64.img"
+    "ubuntu2604|Ubuntu-2604|14|ubuntu-2604-template.img|https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img"
     "fedora42|Fedora-42|22|fedora-42-template.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2"
     "fedora43|Fedora-43|23|fedora-43-template.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2"
 )
@@ -68,9 +68,9 @@ declare -a DISTRO_METADATA=(
 # Map of distro groups to their individual IDs
 declare -A DISTRO_GROUPS=(
     [debian]="debian11 debian12 debian13"
-    [ubuntu]="ubuntu2204 ubuntu2404 ubuntu2504"
+    [ubuntu]="ubuntu2204 ubuntu2404 ubuntu2604"
     [fedora]="fedora42 fedora43"
-    [all]="debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2504 fedora42 fedora43"
+    [all]="debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2604 fedora42 fedora43"
 )
 
 print_usage() {
@@ -83,8 +83,8 @@ Options:
     --build=LIST      Comma-separated list of distros to build. Special values:
                         all      - build every distro (default)
                         debian   - debian11, debian12, debian13
-                        ubuntu   - ubuntu2204, ubuntu2404, ubuntu2504
-                      Individual names: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2504, fedora42, fedora43
+                        ubuntu   - ubuntu2204, ubuntu2404, ubuntu2604
+                      Individual names: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora42, fedora43
     --rebuild-templates     Delete existing VMs at target VMIDs before building (destructive).
                       Without this flag, existing VMs are preserved.
     --run-packer      Packer will be used for customization. Checks both base and packer VMIDs.
@@ -127,7 +127,7 @@ else
             SELECTED_DISTROS="${SELECTED_DISTROS} ${DISTRO_GROUPS[$item]}"
         else
             # Check if it's a valid individual distro ID
-            if [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2504 fedora42 fedora43 " == *" $item "* ]]; then
+            if [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2604 fedora42 fedora43 " == *" $item "* ]]; then
                 SELECTED_DISTROS="${SELECTED_DISTROS} $item"
             else
                 echo "Warning: unknown build item '$item' - ignoring" >&2
