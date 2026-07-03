@@ -148,20 +148,32 @@ create_template() {
     local filename="$3"
     local download_url="$4"
     local proxmox_storage="$5"
-    
-    echo "Downloading the Image"
-    curl -L -o ./workingdir/"$filename" "$download_url" > /dev/null 2>&1
-    
-    echo "Installing Qemu-Guest-Agent to image"
-    virt-customize -a ./workingdir/"$filename" --install bash-completion > /dev/null 2>&1
-    virt-customize -a ./workingdir/"$filename" --install qemu-guest-agent > /dev/null 2>&1
-    
+    local image="$WORKING_DIR/$filename"
+
+    echo "Downloading the image from $download_url"
+    # -f: fail (non-zero) on HTTP errors instead of saving an error page as the disk.
+    if ! curl -fSL -o "$image" "$download_url"; then
+        echo "Error: failed to download image for $template_name from $download_url" >&2
+        return 1
+    fi
+
+    echo "Installing qemu-guest-agent into the image"
+    if ! virt-customize -a "$image" --install qemu-guest-agent,bash-completion > /dev/null; then
+        echo "Error: virt-customize failed for $template_name" >&2
+        return 1
+    fi
+
     echo "Creating template $template_name (VMID: $vmid)"
-    qm create "$vmid" --name "$template_name" --ostype l26
+    qm create "$vmid" --name "$template_name" --ostype l26 || return 1
     qm set "$vmid" --net0 virtio,bridge=vmbr0
     qm set "$vmid" --serial0 socket --vga serial0
     qm set "$vmid" --memory 1024 --cores 4 --cpu host
-    qm set "$vmid" --scsi0 "${proxmox_storage}:0,import-from=/root/workingdir/$filename,discard=on" > /dev/null 2>&1
+    # Import the downloaded disk. Uses the same absolute $image path the download wrote to,
+    # so it works regardless of the SSH user's home directory.
+    if ! qm set "$vmid" --scsi0 "${proxmox_storage}:0,import-from=${image},discard=on"; then
+        echo "Error: failed to import disk for $template_name (VMID $vmid)" >&2
+        return 1
+    fi
     qm set "$vmid" --boot order=scsi0 --scsihw virtio-scsi-single
     qm set "$vmid" --agent enabled=1,fstrim_cloned_disks=1
     qm set "$vmid" --ide3 "${proxmox_storage}:cloudinit"
@@ -209,6 +221,11 @@ manage_vmid_lifecycle() {
 
 apt-get install libguestfs-tools -y > /dev/null 2>&1
 
+# Working directory for downloaded images. Absolute path so `qm ... import-from` resolves
+# correctly no matter which user/home the script runs from.
+WORKING_DIR="$(pwd)/workingdir"
+mkdir -p "$WORKING_DIR"
+
 # Process all selected distros
 for distro_config in "${DISTRO_METADATA[@]}"; do
     IFS='|' read -r distro_id distro_name offset filename url <<< "$distro_config"
@@ -228,5 +245,8 @@ for distro_config in "${DISTRO_METADATA[@]}"; do
     
     # Build the template
     echo "Creating base ${distro_name} Template"
-    create_template "$vmid" "$template_name" "$filename" "$url" "$PROXMOX_STORAGE"
+    if ! create_template "$vmid" "$template_name" "$filename" "$url" "$PROXMOX_STORAGE"; then
+        echo "Error: failed to build ${distro_name} template (VMID $vmid). Aborting." >&2
+        exit 1
+    fi
 done

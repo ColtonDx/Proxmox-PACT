@@ -83,7 +83,8 @@ WORK_DIR_NAME="pact_build_$(date +%s)_${RANDOM}"
 ################### CLI OPTION PARSING
 #####################################################################################
 
-# Default flags and values (set BEFORE sourcing config file so config file can override)
+# Default flags and values (lowest precedence: the answerfile, then PACT_* env vars,
+# then CLI arguments each override these in turn)
 RUN_PACKER=false
 REBUILD_TEMPLATES=false
 INTERACTIVE_MODE=false
@@ -98,10 +99,35 @@ PACKER_TOKEN_SECRET=""
 ANSWERFILE_PATH=""
 
 #####################################################################################
+# LOAD ANSWERFILE (.env.local by default, or --answerfile-path / PACT_ANSWERFILE_PATH)
+#####################################################################################
+# Resolve the answerfile path first (a CLI --answerfile-path beats PACT_ANSWERFILE_PATH),
+# then source it HERE, before the PACT_* env block and the CLI parse loop further down.
+# That ordering is what enforces the documented precedence:
+#     CLI args  >  PACT_* env vars  >  answerfile  >  built-in defaults
+# i.e. the answerfile can only override the defaults, never a value the user passed
+# explicitly on the command line or via a PACT_* variable.
+[ -n "${PACT_ANSWERFILE_PATH:-}" ] && ANSWERFILE_PATH="${PACT_ANSWERFILE_PATH}"
+for arg in "$@"; do
+    case "$arg" in
+        --answerfile-path=*) ANSWERFILE_PATH="${arg#*=}" ;;
+    esac
+done
+
+CONFIG_FILE_EXPANDED="${ANSWERFILE_PATH:-.env.local}"
+# Expand a leading tilde in the path
+CONFIG_FILE_EXPANDED="${CONFIG_FILE_EXPANDED/#\~/$HOME}"
+if [ -f "$CONFIG_FILE_EXPANDED" ]; then
+    echo "Loading configuration from $CONFIG_FILE_EXPANDED..."
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE_EXPANDED"
+fi
+
+#####################################################################################
 # LOAD ENVIRONMENT VARIABLES (PACT_ PREFIX)
 #####################################################################################
-# Check for environment variables with PACT_ prefix and override defaults if set
-# Priority: Environment Variables (PACT_*) > Script Defaults
+# Override the answerfile/defaults with any PACT_* environment variables that are set.
+# Priority: CLI args (parsed below) > PACT_* env > answerfile > script defaults
 [ -n "${PACT_RUN_PACKER:-}" ] && RUN_PACKER="${PACT_RUN_PACKER}"
 [ -n "${PACT_REBUILD_TEMPLATES:-}" ] && REBUILD_TEMPLATES="${PACT_REBUILD_TEMPLATES}"
 [ -n "${PACT_INTERACTIVE_MODE:-}" ] && INTERACTIVE_MODE="${PACT_INTERACTIVE_MODE}"
@@ -249,18 +275,6 @@ for arg in "$@"; do
             ;;
     esac
 done
-
-# Source config file if it exists (.env.local by default, or custom path via --answerfile-path)
-# This allows users to pre-configure variables instead of using CLI args or interactive mode
-# Config file values are loaded here and can be overridden by CLI arguments passed above
-CONFIG_FILE_EXPANDED="${ANSWERFILE_PATH:-.env.local}"
-# Expand tilde in path
-CONFIG_FILE_EXPANDED="${CONFIG_FILE_EXPANDED/#\~/$HOME}"
-if [ -f "$CONFIG_FILE_EXPANDED" ]; then
-    echo "Loading configuration from $CONFIG_FILE_EXPANDED..."
-    # shellcheck source=/dev/null
-    source "$CONFIG_FILE_EXPANDED"
-fi
 
 # Validate that --interactive is not mixed with other arguments
 if [ "$INTERACTIVE_MODE" = true ]; then
@@ -540,44 +554,49 @@ echo ""
 ################### HELPER FUNCTION FOR URL/PATH RESOLUTION
 #####################################################################################
 
-# Function to resolve a file reference that can be either a URL or a local path
-# If it's a URL (starts with http/https), downloads it to a temp file
-# If it's a local path, validates it exists
-# Returns the resolved path (either temp downloaded file or local path)
+# Temp files created when custom Packer/Ansible files are passed as URLs. They are
+# cleaned up by a single EXIT trap (see below); resolve_file_reference must NOT set its
+# own trap, because it is called in the current shell and an in-function trap set inside
+# a command substitution would fire — and delete the download — the moment it returned.
+PACT_TMP_FILES=()
+cleanup_tmp_files() {
+    [ "${#PACT_TMP_FILES[@]}" -gt 0 ] && rm -f "${PACT_TMP_FILES[@]}"
+}
+trap cleanup_tmp_files EXIT
+
+# Resolve a file reference that can be either a URL or a local path.
+# For a URL it downloads to a temp file (tracked in PACT_TMP_FILES for cleanup); for a
+# local path it validates the file exists. On success it sets the global RESOLVED_FILE
+# to the usable local path and returns 0; on failure it prints an error and returns 1.
+# Call it directly (not via $(...)) so RESOLVED_FILE and PACT_TMP_FILES persist.
 resolve_file_reference() {
     local ref="$1"
     local name="$2"  # For error messages
-    
+
     if [[ "$ref" =~ ^https?:// ]]; then
         # It's a URL - download it to a temp file
-        local temp_file="/tmp/pact_${name}_$$.tmp"
+        local safe_name="${name// /-}"
+        local temp_file="/tmp/pact_${safe_name}_$$_${RANDOM}.tmp"
         echo "Downloading $name from URL: $ref" >&2
-        
-        local download_ok=true
+
         if command -v curl &> /dev/null; then
-            curl -fsSL -o "$temp_file" "$ref" || download_ok=false
+            curl -fsSL -o "$temp_file" "$ref" || { echo "Error: Failed to download $name from $ref" >&2; return 1; }
         elif command -v wget &> /dev/null; then
-            wget -q -O "$temp_file" "$ref" || download_ok=false
+            wget -q -O "$temp_file" "$ref" || { echo "Error: Failed to download $name from $ref" >&2; return 1; }
         else
             echo "Error: Neither curl nor wget found to download $name from URL" >&2
             return 1
         fi
 
-        if [ "$download_ok" = false ]; then
-            echo "Error: Failed to download $name from $ref" >&2
-            return 1
-        fi
-
-        # Trap to clean up temp file on exit
-        trap 'rm -f "$temp_file"' EXIT
-        echo "$temp_file"
+        PACT_TMP_FILES+=("$temp_file")
+        RESOLVED_FILE="$temp_file"
     else
         # It's a local path - validate it exists
         if [ ! -f "$ref" ]; then
             echo "Error: $name not found at path: $ref" >&2
             return 1
         fi
-        echo "$ref"
+        RESOLVED_FILE="$ref"
     fi
 }
 
@@ -606,20 +625,16 @@ packer_build() {
     local ansiblefile="${CUSTOM_ANSIBLE_PLAYBOOK:-./Ansible/Playbooks/image_customizations.yml}"
     local ansiblevarfile="${CUSTOM_ANSIBLE_VARFILE:-./Ansible/Variables/vars.yml}"
     
-    # Resolve packerfile (handle URLs and paths)
-    if ! packerfile=$(resolve_file_reference "$packerfile" "Packer template"); then
-        return 1
-    fi
+    # Resolve packerfile / ansible files (handle URLs and paths). Each call sets the
+    # global RESOLVED_FILE on success.
+    resolve_file_reference "$packerfile" "Packer template" || return 1
+    packerfile="$RESOLVED_FILE"
 
-    # Resolve ansiblefile (handle URLs and paths)
-    if ! ansiblefile=$(resolve_file_reference "$ansiblefile" "Ansible playbook"); then
-        return 1
-    fi
+    resolve_file_reference "$ansiblefile" "Ansible playbook" || return 1
+    ansiblefile="$RESOLVED_FILE"
 
-    # Resolve ansiblevarfile (handle URLs and paths)
-    if ! ansiblevarfile=$(resolve_file_reference "$ansiblevarfile" "Ansible variables file"); then
-        return 1
-    fi
+    resolve_file_reference "$ansiblevarfile" "Ansible variables file" || return 1
+    ansiblevarfile="$RESOLVED_FILE"
 
     if ! packer init "$packerfile"; then
         echo "Error: Packer init failed" >&2
@@ -747,18 +762,20 @@ fi
 
 # Install Packer only if --run-packer option is enabled (regardless of local or remote)
 if [ "$RUN_PACKER" = true ]; then
-    if ! command -v packer &> /dev/null
-    then
-        echo "Packer is not installed. Installing Packer..."
-        # Download Packer
-        wget https://releases.hashicorp.com/packer/1.7.8/packer_1.7.8_linux_amd64.zip > /dev/null 2>&1
-        # Unzip the downloaded file
-        unzip packer_1.7.8_linux_amd64.zip > /dev/null 2>&1
-        # Move the Packer binary to /usr/local/bin
+    # Keep this in sync with .github/workflows/ci.yml (the setup-packer version) so the
+    # template is built with the same Packer that CI validates it against.
+    PACKER_VERSION="1.11.2"
+    if ! command -v packer &> /dev/null; then
+        echo "Packer is not installed. Installing Packer ${PACKER_VERSION}..."
+        packer_zip="packer_${PACKER_VERSION}_linux_amd64.zip"
+        if ! wget -q "https://releases.hashicorp.com/packer/${PACKER_VERSION}/${packer_zip}"; then
+            echo "Error: Failed to download Packer ${PACKER_VERSION}" >&2
+            exit 1
+        fi
+        unzip -o -q "$packer_zip"
         sudo mv packer /usr/local/bin/
-        # Clean up the zip file
-        rm packer_1.7.8_linux_azip
-        echo "Packer installed successfully."
+        rm -f "$packer_zip"
+        echo "Packer ${PACKER_VERSION} installed successfully."
     else
         echo "Packer is already installed."
     fi
@@ -807,7 +824,9 @@ if [ "$PROXMOX_IS_REMOTE" = true ]; then
         ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" << EOF
         chmod +x ./$WORK_DIR_NAME/proxmox.sh
         ./$WORK_DIR_NAME/proxmox.sh ${PROXMOX_SCRIPT_ARGS[*]}
+        proxmox_rc=\$?
         rm -rf ./$WORK_DIR_NAME
+        exit \$proxmox_rc
 EOF
     else
         # Using password authentication
@@ -822,8 +841,15 @@ EOF
         sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" << EOF
         chmod +x ./$WORK_DIR_NAME/proxmox.sh
         ./$WORK_DIR_NAME/proxmox.sh ${PROXMOX_SCRIPT_ARGS[*]}
+        proxmox_rc=\$?
         rm -rf ./$WORK_DIR_NAME
+        exit \$proxmox_rc
 EOF
+    fi
+    proxmox_exit=$?
+    if [ "$proxmox_exit" -ne 0 ]; then
+        echo "Error: template creation on the Proxmox host failed (exit $proxmox_exit). Aborting." >&2
+        exit 1
     fi
 else
     # Run proxmox.sh locally
@@ -851,9 +877,15 @@ else
     chmod +x "./$WORK_DIR_NAME/proxmox.sh"
     
     "./$WORK_DIR_NAME/proxmox.sh" "${PROXMOX_SCRIPT_ARGS[@]}"
-    
+    proxmox_exit=$?
+
     # Cleanup working directory
     rm -rf "./$WORK_DIR_NAME"
+
+    if [ "$proxmox_exit" -ne 0 ]; then
+        echo "Error: template creation failed (exit $proxmox_exit). Aborting." >&2
+        exit 1
+    fi
 fi
 
 # Run Packer if enabled
