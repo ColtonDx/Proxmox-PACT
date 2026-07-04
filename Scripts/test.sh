@@ -495,6 +495,14 @@ preflight() {
 
     if ! [[ "$TEST_VMID_BASE" =~ ^[0-9]+$ ]]; then
         echo "Error: --vmid-base must be numeric" >&2; errors=$((errors+1))
+    elif [ "$TEST_VMID_BASE" -lt 80000 ]; then
+        # This test builds templates and then DELETES every one of them, so it must stay
+        # in an isolated high range. A PACT_VMID_BASE left over from a production build
+        # (e.g. 800) would otherwise silently retarget it at real templates.
+        echo "Error: refusing to run with --vmid-base=$TEST_VMID_BASE (must be >= 80000)." >&2
+        echo "       This script destroys every template it creates; keep it out of the" >&2
+        echo "       production VMID range. Pass --vmid-base=88000 explicitly." >&2
+        errors=$((errors+1))
     fi
 
     [ "$errors" -gt 0 ] && { echo ""; print_usage; exit 1; }

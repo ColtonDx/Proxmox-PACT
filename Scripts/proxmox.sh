@@ -92,7 +92,7 @@ Options:
 EOF
 }
 
-# Defaults (may be overridden by Options.ini earlier)
+# Runtime defaults (CLI arguments below may override these)
 VMID_BASE="${DEFAULT_VMID_BASE}"
 PROXMOX_STORAGE="${PROXMOX_STORAGE:-$DEFAULT_PROXMOX_STORAGE}"
 BUILD_DISTROS="all"
@@ -194,8 +194,7 @@ check_vmid_exists() {
 # Handle template rebuild/destruction (base + customization VMIDs)
 manage_vmid_lifecycle() {
     local vmid="$1"
-    local offset="$2"
-    
+
     if [ "$REBUILD_TEMPLATES" = true ]; then
         qm destroy "$vmid" 2>/dev/null
         # Only destroy packer VMID if packer is enabled
@@ -239,7 +238,7 @@ for distro_config in "${DISTRO_METADATA[@]}"; do
     template_name="Template-${distro_name}"
     
     # Handle VMID lifecycle (destroy or validate)
-    if ! manage_vmid_lifecycle "$vmid" "$offset"; then
+    if ! manage_vmid_lifecycle "$vmid"; then
         exit 1
     fi
     

@@ -22,7 +22,7 @@
 #
 # Smart dependency management:
 #  * Installs only required packages based on selected options
-#  * Installs Packer only if --packer is specified
+#  * Installs Packer only if --run-packer is specified
 #
 # Usage: ./build.sh [OPTIONS]
 #
@@ -58,14 +58,13 @@
 #   PROXMOX_SSH_PASSWORD           SSH password (overridden by CLI args)
 #   SSH_PRIVATE_KEY_PATH           SSH key path (overridden by CLI args)
 #   PROXMOX_STORAGE                Storage pool name (overridden by CLI args)
-#   VMID_BASE                      Base VMID for templates (overridden by CLI args)
+#   VMID_BASE                      Base VMID for templates (override with PACT_VMID_BASE env var)
 #   BUILD_DISTROS                   Distros to build, comma-separated (overridden by CLI args)
 #   PROXMOX_IS_REMOTE              Use SSH to Proxmox (true/false, default: true)
 #   RUN_PACKER                     Enable Packer customization (true/false, default: false)
 #   REBUILD_TEMPLATES                     Delete existing VMs before building (true/false, default: false)
 #   PACKER_TOKEN_ID                Proxmox API Token ID (required if RUN_PACKER=true)
 #   PACKER_TOKEN_SECRET            Proxmox API Token Secret (required if RUN_PACKER=true)
-#   PROXMOX_TARGET_NODE             Proxmox target node for Packer (default: pve)
 #   CUSTOM_PACKERFILE              Custom Packer template path (optional)
 #   CUSTOM_ANSIBLE_PLAYBOOK        Custom Ansible playbook for Packer (optional)
 #   CUSTOM_ANSIBLE_VARFILE         Custom Ansible variables file for Packer (optional)
@@ -180,16 +179,16 @@ Options:
   --run-packer               Run Packer builds for image customization.
   --rebuild-templates             Delete existing VMs before building new ones (destructive).
   --proxmox-host=HOSTNAME    Proxmox hostname or IP address (default: pve.local).
-  --proxmox-user=USERNAME    SSH username for Proxmox (default: root).
-  --proxmox-password=PASS    SSH password for Proxmox authentication.
-  --proxmox-key=PATH         Path to SSH private key for authentication.
+  --proxmox-ssh-user=USER    SSH username for Proxmox (default: root).
+  --proxmox-ssh-password=PASS  SSH password for Proxmox authentication.
+  --ssh-private-key-path=PATH  Path to SSH private key for authentication.
   --proxmox-storage=POOL     Proxmox storage pool name (default: local-lvm).
   --proxmox-target-node=NODE Proxmox target node for Packer (default: pve).
   --local                    Run directly on Proxmox host (no SSH needed).
   --build-distros=LIST       Comma-separated list of distros to build (e.g., debian12,ubuntu2404).
-  --answerfile-path=PATH          Path to custom answerfile (.env.local used by default if exists).
+  --answerfile-path=PATH     Path to custom answerfile (.env.local used by default if exists).
   --custom-packerfile=PATH   Path or URL to custom Packer template file instead of default.
-  --custom-ansible=PATH      Path or URL to custom Ansible playbook for Packer customization.
+  --custom-ansible-playbook=PATH  Path or URL to custom Ansible playbook for Packer customization.
   --custom-ansible-varfile=PATH  Path or URL to custom variables file for Ansible playbook (default: ./Ansible/Variables/vars.yml).
   --packer-token-id=TOKEN    Proxmox API Token ID for Packer (required with --run-packer).
   --packer-token-secret=SEC  Proxmox API Token Secret for Packer (required with --run-packer).
@@ -378,7 +377,6 @@ if [ "$INTERACTIVE_MODE" = true ]; then
     echo ""
     read -p "Is the Proxmox server remote? (Y/N) [Default: Yes]: " -r choice_remote
     if [[ "$choice_remote" =~ ^[Nn]$ ]]; then
-        USE_ANSIBLE=false
         PROXMOX_IS_REMOTE=false
     else
         PROXMOX_IS_REMOTE=true
@@ -671,50 +669,25 @@ fi
 ###################REQUIREMENTS
 #####################################################################################
 
-# Build package list based on selected options
-# Skip packages if Proxmox is local (only install Packer if needed)
-if [ "$PROXMOX_IS_REMOTE" = true ]; then
+# Determine which host packages we actually need, based on what this run will do:
+#   - sshpass: only for remote password authentication (not key auth, not local mode)
+#   - wget/unzip/git/curl/ansible: whenever Packer runs, local or remote
+PACKAGES=""
+if [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ]; then
     PACKAGES="sshpass"
+fi
+if [ "$RUN_PACKER" = true ]; then
+    PACKAGES="$PACKAGES wget unzip git curl ansible"
+fi
 
-    # Add wget, unzip, git, curl, ansible only if running Packer
-    if [ "$RUN_PACKER" = true ]; then
-        PACKAGES="$PACKAGES wget unzip git curl ansible"
-    fi
+if [ -n "$PACKAGES" ]; then
 
-    # Check which packages are already installed
+    # A tool is "missing" if its command isn't on PATH. Every package we need here has
+    # a same-named command, so this avoids substring false positives (e.g. dpkg -l | grep
+    # curl matching libcurl4) and needs no per-distro detection logic.
     PACKAGES_TO_INSTALL=()
     for pkg in $PACKAGES; do
-        pkg_installed=false
-        
-        case "$OS" in
-            ubuntu|debian)
-                # Check if package is installed via dpkg
-                if dpkg -l | grep -q "^ii.*$pkg"; then
-                    pkg_installed=true
-                fi
-                ;;
-            centos|rocky|almalinux|fedora|rhel)
-                # Check if package is installed via dnf
-                if dnf list installed "$pkg" &> /dev/null; then
-                    pkg_installed=true
-                fi
-                ;;
-            opensuse|sles)
-                # Check if package is installed via zypper
-                if zypper se -i "$pkg" &> /dev/null; then
-                    pkg_installed=true
-                fi
-                ;;
-        esac
-        
-        # For wget specifically, also check if the command is available
-        if [ "$pkg" = "wget" ]; then
-            if command -v wget &> /dev/null || command -v wget2 &> /dev/null; then
-                pkg_installed=true
-            fi
-        fi
-        
-        if [ "$pkg_installed" = false ]; then
+        if ! command -v "$pkg" &> /dev/null; then
             PACKAGES_TO_INSTALL+=("$pkg")
         fi
     done
@@ -752,8 +725,8 @@ if [ "$PROXMOX_IS_REMOTE" = true ]; then
     fi
 fi
 
-# Verify sshpass is available if needed
-if [ "$PROXMOX_IS_REMOTE" = true ] && [ "$USE_ANSIBLE" = false ]; then
+# Verify sshpass is available for remote password authentication (not needed with a key).
+if [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ]; then
     if ! command -v sshpass &> /dev/null; then
         echo "Error: sshpass is required for SSH password authentication but is not installed" >&2
         exit 1

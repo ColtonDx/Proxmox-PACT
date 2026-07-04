@@ -81,48 +81,39 @@ locals {
     debian11 = {
       template_name = "Template-Debian-11"
       vm_name       = "PACT-Debian-11"
-      build_name    = "Debian11-Packer"
     }
     debian12 = {
       template_name = "Template-Debian-12"
       vm_name       = "PACT-Debian-12"
-      build_name    = "Debian12-Packer"
     }
     debian13 = {
       template_name = "Template-Debian-13"
       vm_name       = "PACT-Debian-13"
-      build_name    = "Debian13-Packer"
     }
     ubuntu2204 = {
       template_name = "Template-Ubuntu-2204"
       vm_name       = "PACT-Ubuntu-2204"
-      build_name    = "Ubuntu2204-Packer"
     }
     ubuntu2404 = {
       template_name = "Template-Ubuntu-2404"
       vm_name       = "PACT-Ubuntu-2404"
-      build_name    = "Ubuntu2404-Packer"
     }
     ubuntu2604 = {
       template_name = "Template-Ubuntu-2604"
       vm_name       = "PACT-Ubuntu-2604"
-      build_name    = "Ubuntu2604-Packer"
     }
     fedora42 = {
       template_name = "Template-Fedora-42"
       vm_name       = "PACT-Fedora-42"
-      build_name    = "Fedora42-Packer"
     }
     fedora43 = {
       template_name = "Template-Fedora-43"
       vm_name       = "PACT-Fedora-43"
-      build_name    = "Fedora43-Packer"
     }
   }
 
-  config          = local.distro_config[var.distro]
-  build_time      = timestamp()
-  proxmox_storage = var.proxmox_storage
+  config     = local.distro_config[var.distro]
+  build_time = timestamp()
 }
 
 # Resource Definition for the VM Template
@@ -163,7 +154,7 @@ source "proxmox-clone" "vm" {
 
   # VM Cloud-Init Settings
   cloud_init              = true
-  cloud_init_storage_pool = local.proxmox_storage
+  cloud_init_storage_pool = var.proxmox_storage
 }
 
 # Build Definition to create the VM Template
