@@ -527,6 +527,31 @@ echo ""
 #####################################################################################
 
 #####################################################################################
+################### PROXMOX SSH/SCP HELPERS
+#####################################################################################
+
+# Run a command on the Proxmox host over SSH, using key or password auth automatically.
+# Extra arguments form the remote command; with no arguments ssh runs the login shell
+# reading commands from stdin (used for the build heredoc below).
+pve_ssh() {
+    if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
+        ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" "$@"
+    else
+        sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" "$@"
+    fi
+}
+
+# Copy a local file to the Proxmox host over SCP (key or password auth).
+pve_scp() {
+    local src="$1" dest="$2"
+    if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
+        scp -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$src" "$PROXMOX_SSH_USER@$PROXMOX_HOST:$dest"
+    else
+        sshpass -p "$PROXMOX_SSH_PASSWORD" scp -o StrictHostKeyChecking=no "$src" "$PROXMOX_SSH_USER@$PROXMOX_HOST:$dest"
+    fi
+}
+
+#####################################################################################
 ################### HELPER FUNCTION FOR URL/PATH RESOLUTION
 #####################################################################################
 
@@ -755,47 +780,28 @@ if [ "$PROXMOX_IS_REMOTE" = true ]; then
         PROXMOX_SCRIPT_ARGS+=("--build=$BUILD_DISTROS")
     fi
 
-    # Determine if using key-based authentication
+    # Verify the private key file exists when key auth is requested.
     if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
-        # Using private key authentication
-        echo "Starting build using public key authentication"
-        # Verify private key file exists
         if [ ! -f "$SSH_PRIVATE_KEY_PATH" ]; then
             echo "Private key file not found: $SSH_PRIVATE_KEY_PATH" >&2
             exit 1
         fi
-
-        # Create unique working directory on remote host
-        ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" mkdir -p "./$WORK_DIR_NAME"
-
-        scp -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no ./Scripts/proxmox.sh "$PROXMOX_SSH_USER@$PROXMOX_HOST:./$WORK_DIR_NAME"
-        # SSH to the remote host and run proxmox.sh with arguments
-        # shellcheck disable=SC2087  # heredoc is expanded locally on purpose to inject the build args
-        ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" << EOF
-        chmod +x ./$WORK_DIR_NAME/proxmox.sh
-        ./$WORK_DIR_NAME/proxmox.sh ${PROXMOX_SCRIPT_ARGS[*]}
-        proxmox_rc=\$?
-        rm -rf ./$WORK_DIR_NAME
-        exit \$proxmox_rc
-EOF
+        echo "Starting build using public key authentication"
     else
-        # Using password authentication
         echo "Starting build using password authentication"
-        # Create unique working directory on remote host
-        sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" mkdir -p "./$WORK_DIR_NAME"
+    fi
 
-        # Copy files to the remote host
-        sshpass -p "$PROXMOX_SSH_PASSWORD" scp -o StrictHostKeyChecking=no ./Scripts/proxmox.sh "$PROXMOX_SSH_USER@$PROXMOX_HOST:./$WORK_DIR_NAME"
-        # SSH to the remote host and run proxmox.sh with arguments
-        # shellcheck disable=SC2087  # heredoc is expanded locally on purpose to inject the build args
-        sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" << EOF
+    # Copy proxmox.sh into a unique working directory on the host and run it there.
+    pve_ssh mkdir -p "./$WORK_DIR_NAME"
+    pve_scp ./Scripts/proxmox.sh "./$WORK_DIR_NAME"
+    # shellcheck disable=SC2087  # heredoc is expanded locally on purpose to inject the build args
+    pve_ssh << EOF
         chmod +x ./$WORK_DIR_NAME/proxmox.sh
         ./$WORK_DIR_NAME/proxmox.sh ${PROXMOX_SCRIPT_ARGS[*]}
         proxmox_rc=\$?
         rm -rf ./$WORK_DIR_NAME
         exit \$proxmox_rc
 EOF
-    fi
     proxmox_exit=$?
     if [ "$proxmox_exit" -ne 0 ]; then
         echo "Error: template creation on the Proxmox host failed (exit $proxmox_exit). Aborting." >&2
@@ -867,13 +873,8 @@ if [ "$RUN_PACKER" = true ]; then
 
         # If remote, execute qm destroy on the remote host
         if [ "$PROXMOX_IS_REMOTE" = true ]; then
-            if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
-                ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" qm destroy "$vmid" 2>/dev/null || true
-            else
-                sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" qm destroy "$vmid" 2>/dev/null || true
-            fi
+            pve_ssh qm destroy "$vmid" 2>/dev/null || true
         else
-            # Local execution
             qm destroy "$vmid" 2>/dev/null || true
         fi
     done
