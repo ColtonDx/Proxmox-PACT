@@ -46,7 +46,7 @@ After base templates are created (regardless of whether SSH or Ansible mode was 
 
 - **Packer/**
   - **Templates/**: 
-    - **universal.pkr.hcl**: Universal template supporting all supported distros. Uses `distro` variable to configure behavior for: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora42, fedora43
+    - **universal.pkr.hcl**: Universal template supporting all supported distros. Uses `distro` variable to configure behavior for: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora43, fedora44
 
 - **Ansible/**
   - **Playbooks/**: 
@@ -111,7 +111,7 @@ Choose which Linux distributions to create templates for. Options include:
 - `debian` - All Debian versions (11, 12, 13)
 - `ubuntu` - All Ubuntu versions (22.04, 24.04, 26.04)
 - `fedora` - All Fedora versions (41, 42)
-- Individual names: `debian11`, `debian12`, `debian13`, `ubuntu2204`, `ubuntu2404`, `ubuntu2604`, `fedora42`, `fedora43`
+- Individual names: `debian11`, `debian12`, `debian13`, `ubuntu2204`, `ubuntu2404`, `ubuntu2604`, `fedora43`, `fedora44`
 
 Example: `debian12,ubuntu2404,fedora43` to create only Debian 12, Ubuntu 24.04, and Fedora 43 templates
 
@@ -391,9 +391,9 @@ ssh root@pve.local
 - `--vmid-base=NUM` - Starting VMID (default: 800)
 - `--proxmox-storage=NAME` - Storage pool name (default: local-lvm)
 - `--build=LIST` - Comma-separated distro names (default: all)
-  - Individual: `debian11`, `debian12`, `debian13`, `ubuntu2204`, `ubuntu2404`, `ubuntu2604`, `fedora42`, `fedora43`
+  - Individual: `debian11`, `debian12`, `debian13`, `ubuntu2204`, `ubuntu2404`, `ubuntu2604`, `fedora43`, `fedora44`
   - Groups: `debian` (all Debian), `ubuntu` (all Ubuntu)
-  - Example: `--build=debian12,ubuntu2404,fedora42`
+  - Example: `--build=debian12,ubuntu2404,fedora43`
 - `--rebuild-templates` - Delete existing VMs at target VMIDs before building
   - Without this flag (default): Existing VMs are preserved
   - With this flag: Old VMs are destroyed before creating new ones
@@ -415,8 +415,8 @@ VM template VMIDs follow this numbering scheme (with default nVMID=800):
 | Ubuntu 2204 | 811 |
 | Ubuntu 2404 | 812 |
 | Ubuntu 2604 | 814 |
-| Fedora 42 | 822 |
 | Fedora 43 | 823 |
+| Fedora 44 | 824 |
 
 If using Packer customization, customized VMs get base VMID + 100 (e.g., Debian 12 → 902).
 
@@ -428,8 +428,8 @@ If using Packer customization, customized VMs get base VMID + 100 (e.g., Debian 
 - Ubuntu 22.04
 - Ubuntu 24.04
 - Ubuntu 26.04
-- Fedora 42
 - Fedora 43
+- Fedora 44
 
 ## Pre-Release Testing
 

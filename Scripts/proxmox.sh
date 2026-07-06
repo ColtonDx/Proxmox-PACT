@@ -16,21 +16,21 @@
 #                               Also accepts: --storage=NAME (for backward compatibility)
 #   --build=LIST                Comma-separated list of distros to create
 #                               Options: all, debian, ubuntu, or individual names
-#                               Example: debian12,ubuntu2404,fedora42
+#                               Example: debian12,ubuntu2404,fedora43
 #   --rebuild-templates            Delete existing VMs before building (destructive)
 #   --run-packer                Packer will customize templates after creation
 #                               Also accepts: --packer-enabled (for backward compatibility)
 #   --help                      Display help message
 #
 # Distro Options:
-#   Individual: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora42, fedora43
+#   Individual: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora43, fedora44
 #   Groups:     debian (all Debian versions), ubuntu (all Ubuntu versions), fedora (all Fedora versions)
 #   Special:    all (create all distros)
 #
 # VMIDs Assignment (with default VMID_BASE=800):
 #   debian11: 801,   debian12: 802,   debian13: 803
 #   ubuntu2204: 811, ubuntu2404: 812, ubuntu2604: 814
-#   fedora42: 822,   fedora43: 823
+#   fedora43: 823,   fedora44: 824
 #
 # If Packer is enabled (--run-packer), customized VMs get base+100 offset
 # Example: debian12 base template = 802, Packer customized = 902
@@ -61,8 +61,8 @@ declare -a DISTRO_METADATA=(
     "ubuntu2204|Ubuntu-2204|11|ubuntu-2204-template.img|https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"
     "ubuntu2404|Ubuntu-2404|12|ubuntu-2404-template.img|https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
     "ubuntu2604|Ubuntu-2604|14|ubuntu-2604-template.img|https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img"
-    "fedora42|Fedora-42|22|fedora-42-template.qcow2|https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2"
-    "fedora43|Fedora-43|23|fedora-43-template.qcow2|https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2"
+    "fedora43|Fedora-43|23|fedora-43-template.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2"
+    "fedora44|Fedora-44|24|fedora-44-template.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.1.x86_64.qcow2"
 )
 
 # List of known distro ids, derived from DISTRO_METADATA above (single source of truth).
@@ -145,8 +145,14 @@ create_template() {
     local image="$WORKING_DIR/$filename"
 
     echo "Downloading the image from $download_url"
-    # -f: fail (non-zero) on HTTP errors instead of saving an error page as the disk.
-    if ! curl -fSL -o "$image" "$download_url"; then
+    # A mirror can occasionally be flaky or return an error page, and curl vs wget don't
+    # always behave identically, so try curl first and fall back to wget.
+    # curl -f makes it fail on an HTTP error page instead of saving it as the disk image.
+    if command -v curl &> /dev/null && curl -fSL --retry 3 --retry-delay 2 -o "$image" "$download_url"; then
+        :
+    elif command -v wget &> /dev/null && wget -O "$image" "$download_url"; then
+        :
+    else
         echo "Error: failed to download image for $template_name from $download_url" >&2
         return 1
     fi
