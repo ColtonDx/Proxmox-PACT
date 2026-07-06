@@ -603,6 +603,24 @@ if [ "$INTERACTIVE_MODE" = true ]; then
     echo ""
 fi
 
+# Fill in still-missing required values for the non-interactive paths (CLI/answerfile/env).
+# On a terminal we prompt for the gaps, so you can supply as much or as little up front;
+# without a terminal the validation below fails with a clear message instead.
+if [ "$INTERACTIVE_MODE" = false ]; then
+    if [ -z "$BUILD_DISTROS" ] && [ -t 0 ]; then
+        read -p "Which distros to build? (all, debian, ubuntu, fedora, or e.g. debian12,ubuntu2404) [all]: " -r _bd
+        BUILD_DISTROS="${_bd:-all}"
+    fi
+    if [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ] && [ -z "${PROXMOX_SSH_PASSWORD:-}" ] && [ -t 0 ]; then
+        read -sp "SSH password for $PROXMOX_SSH_USER@$PROXMOX_HOST: " -r PROXMOX_SSH_PASSWORD
+        echo ""
+    fi
+    if [ "$RUN_PACKER" = true ] && [ -t 0 ]; then
+        [ -z "$PACKER_TOKEN_ID" ]     && read -p  "Proxmox API Token ID (for Packer): " -r PACKER_TOKEN_ID
+        [ -z "$PACKER_TOKEN_SECRET" ] && { read -sp "Proxmox API Token Secret (for Packer): " -r PACKER_TOKEN_SECRET; echo ""; }
+    fi
+fi
+
 # Parse BUILD_DISTROS into SELECTED_DISTROS (set via --build-distros=, answerfile, env,
 # or interactive mode). expand_selected handles all/groups/ids and reports bad input.
 if [ -n "$BUILD_DISTROS" ]; then
@@ -617,6 +635,13 @@ if [ "$RUN_PACKER" = true ]; then
         echo "Error: PACKER_TOKEN_ID and PACKER_TOKEN_SECRET are required when using --run-packer" >&2
         exit 1
     fi
+fi
+
+# Validate that SSH authentication is available for remote mode.
+if [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ] && [ -z "${PROXMOX_SSH_PASSWORD:-}" ]; then
+    echo "Error: SSH authentication required for $PROXMOX_SSH_USER@$PROXMOX_HOST." >&2
+    echo "Provide --proxmox-ssh-password or --ssh-private-key-path, or use --local." >&2
+    exit 1
 fi
 
 # Validate that at least one distro is selected
