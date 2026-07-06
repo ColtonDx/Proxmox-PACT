@@ -681,7 +681,26 @@ resolve_file_reference() {
 
 #Function to customize selected distros with Packer.
 start_packer() {
-    # Iterate through selected distros
+    # Resolve the Packer template and Ansible files ONCE (downloading any URLs a single
+    # time) and initialize Packer once, then reuse them for every selected distro instead
+    # of re-downloading / re-initializing per VM.
+    local packerfile="${CUSTOM_PACKERFILE:-./Packer/Templates/universal.pkr.hcl}"
+    local ansiblefile="${CUSTOM_ANSIBLE_PLAYBOOK:-./Ansible/Playbooks/image_customizations.yml}"
+    local ansiblevarfile="${CUSTOM_ANSIBLE_VARFILE:-./Ansible/Variables/vars.yml}"
+
+    resolve_file_reference "$packerfile" "Packer template" || return 1
+    packerfile="$RESOLVED_FILE"
+    resolve_file_reference "$ansiblefile" "Ansible playbook" || return 1
+    ansiblefile="$RESOLVED_FILE"
+    resolve_file_reference "$ansiblevarfile" "Ansible variables file" || return 1
+    ansiblevarfile="$RESOLVED_FILE"
+
+    if ! packer init "$packerfile"; then
+        echo "Error: Packer init failed" >&2
+        return 1
+    fi
+
+    # Iterate through selected distros, reusing the resolved files.
     for distro_id in "${DISTRO_IDS[@]}"; do
         # Check if this distro was selected
         if [[ " $SELECTED_DISTROS " != *" $distro_id "* ]]; then
@@ -690,34 +709,19 @@ start_packer() {
 
         local offset="${DISTRO_OFFSET[$distro_id]}"
         local vmid=$((VMID_BASE + 100 + offset))
-        packer_build "$distro_id" "$vmid" "${DISTRO_NAME[$distro_id]}"
+        packer_build "$distro_id" "$vmid" "${DISTRO_NAME[$distro_id]}" \
+            "$packerfile" "$ansiblefile" "$ansiblevarfile" || return 1
     done
 }
 
-#Function that runs Packer Build with Environment variable parameters
+#Function that runs a single Packer build with the already-resolved files.
 packer_build() {
     local distro_id="$1"
     local vmid="$2"
     local distro_name="$3"
-    local packerfile="${CUSTOM_PACKERFILE:-./Packer/Templates/universal.pkr.hcl}"
-    local ansiblefile="${CUSTOM_ANSIBLE_PLAYBOOK:-./Ansible/Playbooks/image_customizations.yml}"
-    local ansiblevarfile="${CUSTOM_ANSIBLE_VARFILE:-./Ansible/Variables/vars.yml}"
-
-    # Resolve packerfile / ansible files (handle URLs and paths). Each call sets the
-    # global RESOLVED_FILE on success.
-    resolve_file_reference "$packerfile" "Packer template" || return 1
-    packerfile="$RESOLVED_FILE"
-
-    resolve_file_reference "$ansiblefile" "Ansible playbook" || return 1
-    ansiblefile="$RESOLVED_FILE"
-
-    resolve_file_reference "$ansiblevarfile" "Ansible variables file" || return 1
-    ansiblevarfile="$RESOLVED_FILE"
-
-    if ! packer init "$packerfile"; then
-        echo "Error: Packer init failed" >&2
-        return 1
-    fi
+    local packerfile="$4"
+    local ansiblefile="$5"
+    local ansiblevarfile="$6"
 
     if ! packer build \
         -var "proxmox_target_node=$PROXMOX_TARGET_NODE" \
