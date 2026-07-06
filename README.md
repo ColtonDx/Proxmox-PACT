@@ -42,10 +42,11 @@ After base templates are created (regardless of whether SSH or Ansible mode was 
 - **Scripts/**
   - **build.sh**: Central orchestration script supporting interactive and CLI modes:
   - **proxmox.sh**: Executed on Proxmox host to create base templates. Accepts CLI parameters:
+  - **test.sh**: Pre-release end-to-end test. Builds templates in an isolated 88xxx VMID range using both of build.sh's configuration methods, boots each image to prove it works, then deletes everything. See [Pre-Release Testing](#pre-release-testing).
 
 - **Packer/**
   - **Templates/**: 
-    - **universal.pkr.hcl**: Universal template supporting all supported distros. Uses `distro` variable to configure behavior for: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2504, fedora42, fedora43
+    - **universal.pkr.hcl**: Universal template supporting all supported distros. Uses `distro` variable to configure behavior for: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora43, fedora44
 
 - **Ansible/**
   - **Playbooks/**: 
@@ -68,6 +69,30 @@ After base templates are created (regardless of whether SSH or Ansible mode was 
    - For Packer mode: Packer (auto-installed by build.sh if using --run-packer flag)
 
 ### Quick Setup
+
+**Zero-clone bootstrap** (nothing to download first — `build.sh` fetches everything it needs and prompts you):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ColtonDx/Proxmox-P.A.C.T./main/Scripts/build.sh)
+```
+
+Run with no arguments, it asks whether to continue in interactive mode; answer `n` to point it at an answerfile (local path or URL) plus optional custom playbook/varfile URLs. On the Proxmox side it has the host pull `proxmox.sh` directly instead of copying it over SSH. Use `bash <(curl …)` (process substitution) rather than `curl … | bash` so the interactive prompts keep working.
+
+**One-liner** (clone and launch interactive mode in a single command):
+
+```bash
+git clone https://github.com/ColtonDx/Proxmox-P.A.C.T..git && cd Proxmox-P.A.C.T. && bash Scripts/build.sh --interactive
+```
+
+Non-interactive variant (pass your own settings):
+
+```bash
+git clone https://github.com/ColtonDx/Proxmox-P.A.C.T..git && cd Proxmox-P.A.C.T. && \
+  bash Scripts/build.sh --proxmox-host=pve.local --proxmox-ssh-user=root \
+    --proxmox-ssh-password="your_password" --proxmox-storage=local-lvm
+```
+
+Or step by step:
 
 1. **Clone the Repository**
 
@@ -108,9 +133,9 @@ The **Interactive Mode** (`./Scripts/build.sh --interactive`) is the easiest way
 Choose which Linux distributions to create templates for. Options include:
 - `all` - Create templates for all supported distros
 - `debian` - All Debian versions (11, 12, 13)
-- `ubuntu` - All Ubuntu versions (22.04, 24.04, 25.04)
-- `fedora` - All Fedora versions (41, 42)
-- Individual names: `debian11`, `debian12`, `debian13`, `ubuntu2204`, `ubuntu2404`, `ubuntu2504`, `fedora42`, `fedora43`
+- `ubuntu` - All Ubuntu versions (22.04, 24.04, 26.04)
+- `fedora` - All Fedora versions (43, 44)
+- Individual names: `debian11`, `debian12`, `debian13`, `ubuntu2204`, `ubuntu2404`, `ubuntu2604`, `fedora43`, `fedora44`
 
 Example: `debian12,ubuntu2404,fedora43` to create only Debian 12, Ubuntu 24.04, and Fedora 43 templates
 
@@ -122,7 +147,7 @@ Choose whether to run the Packer customization phase after creating base templat
 #### 3. Base VMID
 Enter the starting VMID number for your templates (default: 800). The script will automatically assign sequential IDs based on distro offsets:
 - Debian 11-13: base+1, base+2, base+3
-- Ubuntu 22.04-25.04: base+11, base+12, base+13
+- Ubuntu 22.04/24.04/26.04: base+11, base+12, base+14
 If Packer is enabled, customized versions will use base+100 offset (e.g., 901, 902, 903 for Debian with Packer).
 
 #### 4. Is the Proxmox server remote?
@@ -390,9 +415,9 @@ ssh root@pve.local
 - `--vmid-base=NUM` - Starting VMID (default: 800)
 - `--proxmox-storage=NAME` - Storage pool name (default: local-lvm)
 - `--build=LIST` - Comma-separated distro names (default: all)
-  - Individual: `debian11`, `debian12`, `debian13`, `ubuntu2204`, `ubuntu2404`, `ubuntu2504`, `fedora42`, `fedora43`
+  - Individual: `debian11`, `debian12`, `debian13`, `ubuntu2204`, `ubuntu2404`, `ubuntu2604`, `fedora43`, `fedora44`
   - Groups: `debian` (all Debian), `ubuntu` (all Ubuntu)
-  - Example: `--build=debian12,ubuntu2404,fedora42`
+  - Example: `--build=debian12,ubuntu2404,fedora43`
 - `--rebuild-templates` - Delete existing VMs at target VMIDs before building
   - Without this flag (default): Existing VMs are preserved
   - With this flag: Old VMs are destroyed before creating new ones
@@ -413,9 +438,9 @@ VM template VMIDs follow this numbering scheme (with default nVMID=800):
 | Debian 13 | 803 |
 | Ubuntu 2204 | 811 |
 | Ubuntu 2404 | 812 |
-| Ubuntu 2504 | 813 |
-| Fedora 42 | 822 |
+| Ubuntu 2604 | 814 |
 | Fedora 43 | 823 |
+| Fedora 44 | 824 |
 
 If using Packer customization, customized VMs get base VMID + 100 (e.g., Debian 12 → 902).
 
@@ -426,9 +451,85 @@ If using Packer customization, customized VMs get base VMID + 100 (e.g., Debian 
 - Debian 13
 - Ubuntu 22.04
 - Ubuntu 24.04
-- Ubuntu 25.04
-- Fedora 42
+- Ubuntu 26.04
 - Fedora 43
+- Fedora 44
+
+## Pre-Release Testing
+
+`Scripts/test.sh` validates that the whole pipeline still works before you cut a
+release. It runs against a real Proxmox host and:
+
+1. Builds the selected templates with **build.sh in variable (CLI argument) mode**, verifies each template was created, **boots it**, then deletes it.
+2. Repeats the build with **build.sh in answerfile mode**, verifies, boots, and deletes.
+
+All test resources use an isolated **88xxx VMID range** (default base `88000`) so
+they never collide with your production templates, and they are destroyed when the
+run finishes (even on failure).
+
+### How boot validation works
+
+build.sh produces *templates*, which are never powered on. To catch images that
+build but fail to boot, the test full-clones each finished template to a temporary
+VM, starts it, and waits for the **QEMU guest agent** to answer (`qm agent <id>
+ping`). The agent only responds once the OS has fully booted, so a successful ping
+is concrete proof the image boots. The temporary clone is then destroyed.
+
+### Requirements
+
+- SSH (or `--local`) access to a Proxmox host where `qm` is available.
+- `sshpass` on the machine running the test when using password authentication.
+- Templates already ship with `qemu-guest-agent` (created by `proxmox.sh`), which the boot check relies on.
+
+### Usage
+
+```bash
+# Test a single distro in both modes (recommended first run)
+./Scripts/test.sh \
+  --proxmox-host=pve.local \
+  --proxmox-ssh-password=secret \
+  --proxmox-storage=local-lvm \
+  --build-distros=debian12
+
+# Full pre-release run across all distros, including Packer-customized templates
+./Scripts/test.sh \
+  --proxmox-host=pve.local \
+  --proxmox-ssh-password=secret \
+  --proxmox-storage=local-lvm \
+  --build-distros=all \
+  --run-packer \
+  --packer-token-id="user@pam!packer" \
+  --packer-token-secret="your_api_token_secret"
+```
+
+Connection settings can also come from `.env.local` or `PACT_*` environment
+variables (same names build.sh uses); CLI arguments take precedence. Useful flags:
+`--mode=variable|answerfile|both`, `--vmid-base=NUM`, `--boot-timeout=SEC`, and
+`--keep` (leave resources in place for debugging). The script exits non-zero if any
+template fails to build or boot, so it can gate a release.
+
+### Continuous Integration
+
+Static checks that don't need a Proxmox host run automatically in GitHub Actions
+(`.github/workflows/ci.yml`) on every push, pull request, and `v*` tag:
+
+- **ShellCheck** on `Scripts/*.sh` (the scripts are clean under ShellCheck's default rules)
+- **Packer** `fmt -check`, `init`, and `validate` for every distro (the distro list is read from `proxmox.sh`, so new distros are covered automatically)
+- **yamllint** + **`ansible-playbook --syntax-check`** on the Ansible files (config in `.yamllint`)
+
+These catch broken scripts, malformed Packer/Ansible changes, and a distro added
+to one place but not another, before a release. The end-to-end build + boot test
+(`Scripts/test.sh`) is not part of CI because it requires a live Proxmox host;
+run it manually as the final pre-release gate.
+
+You can reproduce the CI checks locally:
+
+```bash
+shellcheck Scripts/*.sh
+packer fmt -check Packer/Templates/universal.pkr.hcl
+yamllint Ansible/
+ansible-playbook --syntax-check -i localhost, Ansible/Playbooks/image_customizations.yml
+```
 
 ## Links
 

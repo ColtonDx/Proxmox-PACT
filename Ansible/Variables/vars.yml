@@ -2,4 +2,4 @@
 # Ansible Variables for Proxmox P.A.C.T.
 # Add custom variables here as needed for playbook customization
 # Example:
- custom_key: custom_value
+# custom_key: custom_value
