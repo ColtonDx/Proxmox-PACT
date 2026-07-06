@@ -580,12 +580,12 @@ resolve_file_reference() {
         local temp_file="/tmp/pact_${safe_name}_$$_${RANDOM}.tmp"
         echo "Downloading $name from URL: $ref" >&2
 
-        if command -v curl &> /dev/null; then
-            curl -fsSL -o "$temp_file" "$ref" || { echo "Error: Failed to download $name from $ref" >&2; return 1; }
-        elif command -v wget &> /dev/null; then
-            wget -q -O "$temp_file" "$ref" || { echo "Error: Failed to download $name from $ref" >&2; return 1; }
-        else
-            echo "Error: Neither curl nor wget found to download $name from URL" >&2
+        if ! command -v curl &> /dev/null; then
+            echo "Error: curl is required to download $name from a URL" >&2
+            return 1
+        fi
+        if ! curl -fsSL -o "$temp_file" "$ref"; then
+            echo "Error: Failed to download $name from $ref" >&2
             return 1
         fi
 
@@ -686,13 +686,13 @@ fi
 
 # Determine which host packages we actually need, based on what this run will do:
 #   - sshpass: only for remote password authentication (not key auth, not local mode)
-#   - wget/unzip/git/curl/ansible: whenever Packer runs, local or remote
+#   - unzip/git/curl/ansible: whenever Packer runs, local or remote
 PACKAGES=""
 if [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ]; then
     PACKAGES="sshpass"
 fi
 if [ "$RUN_PACKER" = true ]; then
-    PACKAGES="$PACKAGES wget unzip git curl ansible"
+    PACKAGES="$PACKAGES unzip git curl ansible"
 fi
 
 if [ -n "$PACKAGES" ]; then
@@ -756,7 +756,7 @@ if [ "$RUN_PACKER" = true ]; then
     if ! command -v packer &> /dev/null; then
         echo "Packer is not installed. Installing Packer ${PACKER_VERSION}..."
         packer_zip="packer_${PACKER_VERSION}_linux_amd64.zip"
-        if ! wget -q "https://releases.hashicorp.com/packer/${PACKER_VERSION}/${packer_zip}"; then
+        if ! curl -fSL -O "https://releases.hashicorp.com/packer/${PACKER_VERSION}/${packer_zip}"; then
             echo "Error: Failed to download Packer ${PACKER_VERSION}" >&2
             exit 1
         fi

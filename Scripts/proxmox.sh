@@ -145,14 +145,9 @@ create_template() {
     local image="$WORKING_DIR/$filename"
 
     echo "Downloading the image from $download_url"
-    # A mirror can occasionally be flaky or return an error page, and curl vs wget don't
-    # always behave identically, so try curl first and fall back to wget.
-    # curl -f makes it fail on an HTTP error page instead of saving it as the disk image.
-    if command -v curl &> /dev/null && curl -fSL --retry 3 --retry-delay 2 -o "$image" "$download_url"; then
-        :
-    elif command -v wget &> /dev/null && wget -O "$image" "$download_url"; then
-        :
-    else
+    # -f fails (non-zero) on an HTTP error page instead of saving it as the disk image;
+    # --retry rides out transient mirror hiccups.
+    if ! curl -fSL --retry 3 --retry-delay 2 -o "$image" "$download_url"; then
         echo "Error: failed to download image for $template_name from $download_url" >&2
         return 1
     fi
