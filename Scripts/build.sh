@@ -443,7 +443,7 @@ if [ "$INTERACTIVE_MODE" = true ]; then
 
     # Q2: Ask about Packer customization
     echo ""
-    read -p "Do you want to customize the templates with Packer? (Y/N) [Default: No]: " -r choice_packer
+    read -p "Do you want to customize the templates with Packer/Ansible? (Y/N) [Default: No]: " -r choice_packer
     if [[ "$choice_packer" =~ ^[Yy]$ ]]; then
         RUN_PACKER=true
     fi
@@ -568,6 +568,18 @@ if [ "$INTERACTIVE_MODE" = true ]; then
         if [ -n "$proxmox_target_node_input" ]; then
             PROXMOX_TARGET_NODE="$proxmox_target_node_input"
         fi
+
+        # Ansible/Packer customization files. Each accepts a local path OR a URL
+        # (e.g. a GitLab/GitHub raw link); press Enter to use the built-in defaults.
+        # This is asked in both remote (SSH) and local modes.
+        echo ""
+        echo "Customization files (press Enter for the built-in defaults):"
+        read -p "  Custom Ansible playbook (local path or URL): " -r ansible_playbook_input
+        [ -n "$ansible_playbook_input" ] && CUSTOM_ANSIBLE_PLAYBOOK="$ansible_playbook_input"
+        read -p "  Custom Ansible variables file (local path or URL): " -r ansible_varfile_input
+        [ -n "$ansible_varfile_input" ] && CUSTOM_ANSIBLE_VARFILE="$ansible_varfile_input"
+        read -p "  Custom Packer template (local path or URL): " -r packerfile_input
+        [ -n "$packerfile_input" ] && CUSTOM_PACKERFILE="$packerfile_input"
     fi
 
     echo ""
@@ -606,6 +618,11 @@ echo "  Base VMID: $VMID_BASE"
 echo "  Selected Distros: $SELECTED_DISTROS"
 echo "  Run Packer: $RUN_PACKER"
 echo "  Rebuild Templates: $REBUILD_TEMPLATES"
+if [ "$RUN_PACKER" = true ]; then
+    [ -n "$CUSTOM_PACKERFILE" ]       && echo "  Custom Packer template: $CUSTOM_PACKERFILE"
+    [ -n "$CUSTOM_ANSIBLE_PLAYBOOK" ] && echo "  Custom Ansible playbook: $CUSTOM_ANSIBLE_PLAYBOOK"
+    [ -n "$CUSTOM_ANSIBLE_VARFILE" ]  && echo "  Custom Ansible varfile: $CUSTOM_ANSIBLE_VARFILE"
+fi
 echo ""
 
 #####################################################################################
