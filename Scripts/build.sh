@@ -78,6 +78,9 @@
 # Generate a unique working directory name to avoid conflicts
 WORK_DIR_NAME="pact_build_$(date +%s)_${RANDOM}"
 
+# Directory containing this script (used to read distro metadata from proxmox.sh)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 #####################################################################################
 ################### CLI OPTION PARSING
 #####################################################################################
@@ -146,26 +149,51 @@ fi
 [ -n "${PACT_PROXMOX_TARGET_NODE:-}" ] && PROXMOX_TARGET_NODE="${PACT_PROXMOX_TARGET_NODE}"
 [ -n "${PACT_VMID_BASE:-}" ] && VMID_BASE="${PACT_VMID_BASE}"
 
-# Define distro metadata: id|name|vmid_offset
-# Maps distro names to their identifiers for easy grouping
-declare -a DISTRO_METADATA=(
-    "debian11|Debian-11|1"
-    "debian12|Debian-12|2"
-    "debian13|Debian-13|3"
-    "ubuntu2204|Ubuntu-22.04|11"
-    "ubuntu2404|Ubuntu-24.04|12"
-    "ubuntu2604|Ubuntu-26.04|14"
-    "fedora42|Fedora-42|22"
-    "fedora43|Fedora-43|23"
-)
+# Distro metadata (ids, display names, VMID offsets) is defined once in
+# Scripts/proxmox.sh. Parse it here so there is a single source of truth: adding or
+# removing a distro only touches proxmox.sh and the Packer template, never this file.
+declare -a DISTRO_IDS=()
+declare -A DISTRO_NAME=()
+declare -A DISTRO_OFFSET=()
+while IFS= read -r _line; do
+    _entry="${_line#*\"}"; _entry="${_entry%%\"*}"
+    IFS='|' read -r _id _name _offset _ <<< "$_entry"
+    [ -z "$_id" ] && continue
+    DISTRO_IDS+=("$_id")
+    DISTRO_NAME["$_id"]="$_name"
+    DISTRO_OFFSET["$_id"]="$_offset"
+done < <(grep -E '^[[:space:]]*"[a-z0-9]+\|' "$SCRIPT_DIR/proxmox.sh")
 
-# Map of distro groups to their individual IDs
-declare -A DISTRO_GROUPS=(
-    [debian]="debian11 debian12 debian13"
-    [ubuntu]="ubuntu2204 ubuntu2404 ubuntu2604"
-    [fedora]="fedora42 fedora43"
-    [all]="debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2604 fedora42 fedora43"
-)
+if [ "${#DISTRO_IDS[@]}" -eq 0 ]; then
+    echo "Error: could not read distro metadata from $SCRIPT_DIR/proxmox.sh" >&2
+    exit 1
+fi
+
+# Expand a build spec into concrete distro ids. Accepts "all", individual ids, or a
+# group prefix (e.g. "debian" -> debian11/12/13). Prints the de-duped id list and
+# returns 0; on an unknown token prints an error and returns 1.
+expand_selected() {
+    local spec="$1" token id out="" bad=""
+    if [ -z "$spec" ] || [ "$spec" = "all" ]; then
+        echo "${DISTRO_IDS[*]}"
+        return 0
+    fi
+    for token in ${spec//,/ }; do
+        local matched=false
+        for id in "${DISTRO_IDS[@]}"; do
+            if [ "$id" = "$token" ] || [[ "$id" == "$token"* ]]; then
+                out="$out $id"; matched=true
+            fi
+        done
+        [ "$matched" = false ] && bad="$bad $token"
+    done
+    if [ -n "$bad" ]; then
+        echo "Error: unknown distro(s):$bad" >&2
+        echo "Valid: all, a group (debian/ubuntu/fedora), or one of: ${DISTRO_IDS[*]}" >&2
+        return 1
+    fi
+    echo "$out" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs
+}
 
 # Selected distros to build (space-separated list of distro IDs)
 SELECTED_DISTROS=""
@@ -290,7 +318,7 @@ if [ "$INTERACTIVE_MODE" = true ]; then
                 ;;
         esac
     done
-    
+
     if [ "$other_args" = true ]; then
         echo "Error: --interactive cannot be mixed with other arguments" >&2
         echo "Use either: ./build.sh --interactive" >&2
@@ -312,67 +340,35 @@ fi
 if [ "$INTERACTIVE_MODE" = true ]; then
     echo "=== Interactive Mode ==="
     echo ""
-    
+
     # Q1: Ask which images to build
     echo "Select distros to create templates from:"
-    echo "  Available: all, debian, ubuntu, fedora, debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora42, fedora43"
-    
+    echo "  Available: all, debian, ubuntu, fedora, ${DISTRO_IDS[*]}"
+
     # Keep asking until valid input is provided
     BUILD_VALID=false
     while [ "$BUILD_VALID" = false ]; do
         read -p "Enter comma-separated list (or 'all' for all distros) [Default: all]: " -r build_input
-        if [ -z "$build_input" ]; then
-            BUILD_DISTROS="all"
-        else
-            BUILD_DISTROS="$build_input"
-        fi
-        
-        # Parse the input
-        SELECTED_DISTROS=""
-        if [ "$BUILD_DISTROS" = "all" ]; then
-            SELECTED_DISTROS="${DISTRO_GROUPS[all]}"
+        BUILD_DISTROS="${build_input:-all}"
+        if SELECTED_DISTROS="$(expand_selected "$BUILD_DISTROS")"; then
             BUILD_VALID=true
-        else
-            # Parse comma-separated list
-            items="$(echo "$BUILD_DISTROS" | tr ',' ' ')"
-            INVALID_ITEMS=""
-            for it in $items; do
-                if [ -n "${DISTRO_GROUPS[$it]}" ]; then
-                    # It's a group
-                    SELECTED_DISTROS="${SELECTED_DISTROS} ${DISTRO_GROUPS[$it]}"
-                elif [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2604 fedora42 fedora43 " == *" $it "* ]]; then
-                    # Valid individual distro
-                    SELECTED_DISTROS="${SELECTED_DISTROS} $it"
-                else
-                    INVALID_ITEMS="$INVALID_ITEMS $it"
-                fi
-            done
-            
-            if [ -n "$INVALID_ITEMS" ]; then
-                echo "Error: Unknown distro(s):$INVALID_ITEMS"
-                echo "Valid options: all, debian, ubuntu, fedora, debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora42, fedora43"
-            else
-                # Remove duplicates
-                SELECTED_DISTROS="$(echo "$SELECTED_DISTROS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)"
-                BUILD_VALID=true
-            fi
         fi
     done
-    
+
     # Q2: Ask about Packer customization
     echo ""
     read -p "Do you want to customize the templates with Packer? (Y/N) [Default: No]: " -r choice_packer
     if [[ "$choice_packer" =~ ^[Yy]$ ]]; then
         RUN_PACKER=true
     fi
-    
+
     # Q3: Ask for Base VMID
     echo ""
     read -p "Base VMID (press Enter for default 800): " -r vmid_input
     if [ -n "$vmid_input" ]; then
         VMID_BASE="$vmid_input"
     fi
-    
+
     # Q4: Ask if Proxmox is remote
     echo ""
     read -p "Is the Proxmox server remote? (Y/N) [Default: Yes]: " -r choice_remote
@@ -381,22 +377,22 @@ if [ "$INTERACTIVE_MODE" = true ]; then
     else
         PROXMOX_IS_REMOTE=true
     fi
-    
+
     # Ask Proxmox settings only if remote
     if [ "$PROXMOX_IS_REMOTE" = true ]; then
         echo ""
         echo "Proxmox Configuration:"
-        
+
         read -p "Proxmox Hostname or IP Address (press Enter for default 'pve.local'): " -r proxmox_host_input
         if [ -n "$proxmox_host_input" ]; then
             PROXMOX_HOST="$proxmox_host_input"
         fi
-        
+
         read -p "SSH Username (press Enter for default 'root'): " -r ssh_user_input
         if [ -n "$ssh_user_input" ]; then
             PROXMOX_SSH_USER="$ssh_user_input"
         fi
-        
+
         read -p "SSH Privatekey Path (leave blank for password authentication): " -r ssh_key_input
         if [ -n "$ssh_key_input" ]; then
             SSH_PRIVATE_KEY_PATH="$ssh_key_input"
@@ -406,30 +402,30 @@ if [ "$INTERACTIVE_MODE" = true ]; then
             echo ""
         fi
     fi
-    
+
     # Ask for storage pool (for both remote and local)
     echo ""
     read -p "Proxmox Storage Pool (press Enter for default 'local-lvm'): " -r storage_input
     if [ -n "$storage_input" ]; then
         PROXMOX_STORAGE="$storage_input"
     fi
-    
+
     # Calculate VMIDs for selected distros
     declare -a SELECTED_VMIDS
     declare -a PACKER_VMIDS
     SELECTED_VMIDS=()
     PACKER_VMIDS=()
-    
-    for distro_entry in "${DISTRO_METADATA[@]}"; do
-        IFS='|' read -r distro_id distro_name offset <<< "$distro_entry"
+
+    for distro_id in "${DISTRO_IDS[@]}"; do
         if [[ " $SELECTED_DISTROS " == *" $distro_id "* ]]; then
+            offset="${DISTRO_OFFSET[$distro_id]}"
             SELECTED_VMIDS+=("$((VMID_BASE + offset))")
             if [ "$RUN_PACKER" = true ]; then
                 PACKER_VMIDS+=("$((VMID_BASE + 100 + offset))")
             fi
         fi
     done
-    
+
     # Display VMID information
     echo ""
     echo "VMIDs that will be created:"
@@ -448,19 +444,19 @@ if [ "$INTERACTIVE_MODE" = true ]; then
     else
         echo "  Base templates: ${SELECTED_VMIDS[*]}"
     fi
-    
+
     # Ask about rebuild with VMID information displayed
     echo ""
     read -p "Delete existing VMs before building (rebuild-templates)? (Y/N) [Default: No]: " -r choice_rebuild
     if [[ "$choice_rebuild" =~ ^[Yy]$ ]]; then
         REBUILD_TEMPLATES=true
     fi
-    
+
     # If Packer is enabled, ask for Packer configuration
     if [ "$RUN_PACKER" = true ]; then
         echo ""
         echo "Packer Configuration:"
-        
+
         # Prompt for Packer Token ID only if not provided via CLI
         while [ -z "$PACKER_TOKEN_ID" ]; do
             read -p "Proxmox API Token ID (required): " -r packer_token_id_input
@@ -470,7 +466,7 @@ if [ "$INTERACTIVE_MODE" = true ]; then
                 echo "Error: Proxmox API Token ID is required when using Packer"
             fi
         done
-        
+
         # Prompt for Packer Token Secret only if not provided via CLI
         while [ -z "$PACKER_TOKEN_SECRET" ]; do
             read -sp "Proxmox API Token Secret (required): " -r packer_token_secret_input
@@ -481,39 +477,21 @@ if [ "$INTERACTIVE_MODE" = true ]; then
                 echo "Error: Proxmox API Token Secret is required when using Packer"
             fi
         done
-        
+
         read -p "Proxmox Target Node (press Enter for default 'pve'): " -r proxmox_target_node_input
         if [ -n "$proxmox_target_node_input" ]; then
             PROXMOX_TARGET_NODE="$proxmox_target_node_input"
         fi
     fi
-    
+
     echo ""
 fi
 
-# Parse BUILD_DISTROS and populate SELECTED_DISTROS
-# BUILD_DISTROS can be set via: --build-distros=, config file, or interactive mode
+# Parse BUILD_DISTROS into SELECTED_DISTROS (set via --build-distros=, answerfile, env,
+# or interactive mode). expand_selected handles all/groups/ids and reports bad input.
 if [ -n "$BUILD_DISTROS" ]; then
-    if [ "$BUILD_DISTROS" = "all" ]; then
-        SELECTED_DISTROS="${DISTRO_GROUPS[all]}"
-    else
-        # Parse comma or space separated list
-        items="$(echo "$BUILD_DISTROS" | tr ',' ' ')"
-        for item in $items; do
-            if [ -n "${DISTRO_GROUPS[$item]}" ]; then
-                # It's a group (debian, ubuntu, fedora, etc.)
-                SELECTED_DISTROS="${SELECTED_DISTROS} ${DISTRO_GROUPS[$item]}"
-            elif [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2604 fedora42 fedora43 " == *" $item "* ]]; then
-                # It's a valid individual distro
-                SELECTED_DISTROS="${SELECTED_DISTROS} $item"
-                else
-                    echo "Error: Unknown template '$item'" >&2
-                    echo "Valid options: all, debian, ubuntu, fedora, debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora42, fedora43" >&2
-                exit 1
-            fi
-        done
-        # Remove duplicates and normalize spacing
-        SELECTED_DISTROS="$(echo "$SELECTED_DISTROS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)"
+    if ! SELECTED_DISTROS="$(expand_selected "$BUILD_DISTROS")"; then
+        exit 1
     fi
 fi
 
@@ -601,16 +579,15 @@ resolve_file_reference() {
 #Function to customize selected distros with Packer.
 start_packer() {
     # Iterate through selected distros
-    for distro_entry in "${DISTRO_METADATA[@]}"; do
-        IFS='|' read -r distro_id distro_name offset <<< "$distro_entry"
-        
+    for distro_id in "${DISTRO_IDS[@]}"; do
         # Check if this distro was selected
         if [[ " $SELECTED_DISTROS " != *" $distro_id "* ]]; then
             continue
         fi
-        
+
+        local offset="${DISTRO_OFFSET[$distro_id]}"
         local vmid=$((VMID_BASE + 100 + offset))
-        packer_build "$distro_id" "$vmid" "$distro_name"
+        packer_build "$distro_id" "$vmid" "${DISTRO_NAME[$distro_id]}"
     done
 }
 
@@ -622,7 +599,7 @@ packer_build() {
     local packerfile="${CUSTOM_PACKERFILE:-./Packer/Templates/universal.pkr.hcl}"
     local ansiblefile="${CUSTOM_ANSIBLE_PLAYBOOK:-./Ansible/Playbooks/image_customizations.yml}"
     local ansiblevarfile="${CUSTOM_ANSIBLE_VARFILE:-./Ansible/Variables/vars.yml}"
-    
+
     # Resolve packerfile / ansible files (handle URLs and paths). Each call sets the
     # global RESOLVED_FILE on success.
     resolve_file_reference "$packerfile" "Packer template" || return 1
@@ -762,22 +739,22 @@ fi
 if [ "$PROXMOX_IS_REMOTE" = true ]; then
     # Build proxmox.sh arguments based on configuration
     PROXMOX_SCRIPT_ARGS=("--vmid-base=$VMID_BASE" "--proxmox-storage=$PROXMOX_STORAGE")
-    
+
     # Add rebuild flag if enabled
     if [ "$REBUILD_TEMPLATES" = true ]; then
         PROXMOX_SCRIPT_ARGS+=("--rebuild-templates")
     fi
-    
+
     # Add run-packer flag if Packer will be run
     if [ "$RUN_PACKER" = true ]; then
         PROXMOX_SCRIPT_ARGS+=("--run-packer")
     fi
-    
+
     # Add build list to arguments
     if [ -n "$BUILD_DISTROS" ]; then
         PROXMOX_SCRIPT_ARGS+=("--build=$BUILD_DISTROS")
     fi
-    
+
     # Determine if using key-based authentication
     if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
         # Using private key authentication
@@ -787,7 +764,7 @@ if [ "$PROXMOX_IS_REMOTE" = true ]; then
             echo "Private key file not found: $SSH_PRIVATE_KEY_PATH" >&2
             exit 1
         fi
-        
+
         # Create unique working directory on remote host
         ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" mkdir -p "./$WORK_DIR_NAME"
 
@@ -827,28 +804,28 @@ EOF
 else
     # Run proxmox.sh locally
     echo "Running proxmox.sh locally..."
-    
+
     # Build proxmox.sh arguments
     PROXMOX_SCRIPT_ARGS=("--vmid-base=$VMID_BASE" "--proxmox-storage=$PROXMOX_STORAGE")
-    
+
     if [ "$REBUILD_TEMPLATES" = true ]; then
         PROXMOX_SCRIPT_ARGS+=("--rebuild-templates")
     fi
-    
+
     if [ "$RUN_PACKER" = true ]; then
         PROXMOX_SCRIPT_ARGS+=("--run-packer")
     fi
-    
+
     # Add build list to arguments
     if [ -n "$BUILD_DISTROS" ]; then
         PROXMOX_SCRIPT_ARGS+=("--build=$BUILD_DISTROS")
     fi
-    
+
     # Create unique local working directory and run
     mkdir -p "./$WORK_DIR_NAME"
     cp ./Scripts/proxmox.sh "./$WORK_DIR_NAME/"
     chmod +x "./$WORK_DIR_NAME/proxmox.sh"
-    
+
     "./$WORK_DIR_NAME/proxmox.sh" "${PROXMOX_SCRIPT_ARGS[@]}"
     proxmox_exit=$?
 
@@ -875,20 +852,19 @@ fi
 # Cleanup intermediate build VMs if Packer was run
 if [ "$RUN_PACKER" = true ]; then
     echo "Cleaning up intermediate build VMs..."
-    
-    # The intermediate build VMs are at the base VMID offsets matching DISTRO_METADATA
+
+    # The intermediate build VMs are at the base VMID offsets from the distro metadata
     # After Packer creates customized versions at offset+100, we no longer need these
-    for distro_entry in "${DISTRO_METADATA[@]}"; do
-        IFS='|' read -r distro_id distro_name offset <<< "$distro_entry"
-        
+    for distro_id in "${DISTRO_IDS[@]}"; do
         # Check if this distro was selected
         if [[ " $SELECTED_DISTROS " != *" $distro_id "* ]]; then
             continue
         fi
-        
+
+        offset="${DISTRO_OFFSET[$distro_id]}"
         vmid=$((VMID_BASE + offset))
         echo "  Destroying intermediate VMID $vmid..."
-        
+
         # If remote, execute qm destroy on the remote host
         if [ "$PROXMOX_IS_REMOTE" = true ]; then
             if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
