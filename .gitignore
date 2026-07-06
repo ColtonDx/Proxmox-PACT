@@ -1,0 +1,10 @@
+# Packer binary + release archives (build.sh installs Packer)
+packer
+packer_*_linux_amd64.zip
+
+# Build working directories
+workingdir/
+pact_build_*/
+
+# Local answerfile (may contain SSH passwords / API tokens)
+.env.local

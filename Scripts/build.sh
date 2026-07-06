@@ -842,13 +842,17 @@ if [ "$RUN_PACKER" = true ]; then
     if ! command -v packer &> /dev/null; then
         echo "Packer is not installed. Installing Packer ${PACKER_VERSION}..."
         packer_zip="packer_${PACKER_VERSION}_linux_amd64.zip"
-        if ! curl -fSL -O "https://releases.hashicorp.com/packer/${PACKER_VERSION}/${packer_zip}"; then
+        # Download and unpack in a temp dir so the archive's other files (LICENSE.txt, etc.)
+        # never land in the working directory/repo; only the packer binary is installed.
+        _pkdir="$(mktemp -d)"
+        if ! curl -fSL -o "$_pkdir/$packer_zip" "https://releases.hashicorp.com/packer/${PACKER_VERSION}/${packer_zip}"; then
             echo "Error: Failed to download Packer ${PACKER_VERSION}" >&2
+            rm -rf "$_pkdir"
             exit 1
         fi
-        unzip -o -q "$packer_zip"
-        sudo mv packer /usr/local/bin/
-        rm -f "$packer_zip"
+        unzip -o -q "$_pkdir/$packer_zip" -d "$_pkdir"
+        sudo mv "$_pkdir/packer" /usr/local/bin/
+        rm -rf "$_pkdir"
         echo "Packer ${PACKER_VERSION} installed successfully."
     else
         echo "Packer is already installed."
