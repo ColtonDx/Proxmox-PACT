@@ -65,13 +65,11 @@ declare -a DISTRO_METADATA=(
     "fedora43|Fedora-43|23|fedora-43-template.qcow2|https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2"
 )
 
-# Map of distro groups to their individual IDs
-declare -A DISTRO_GROUPS=(
-    [debian]="debian11 debian12 debian13"
-    [ubuntu]="ubuntu2204 ubuntu2404 ubuntu2604"
-    [fedora]="fedora42 fedora43"
-    [all]="debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2604 fedora42 fedora43"
-)
+# List of known distro ids, derived from DISTRO_METADATA above (single source of truth).
+declare -a DISTRO_IDS=()
+for _entry in "${DISTRO_METADATA[@]}"; do
+    DISTRO_IDS+=("${_entry%%|*}")
+done
 
 print_usage() {
         cat <<EOF
@@ -84,7 +82,7 @@ Options:
                         all      - build every distro (default)
                         debian   - debian11, debian12, debian13
                         ubuntu   - ubuntu2204, ubuntu2404, ubuntu2604
-                      Individual names: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora42, fedora43
+                      Individual names: ${DISTRO_IDS[*]}
     --rebuild-templates     Delete existing VMs at target VMIDs before building (destructive).
                       Without this flag, existing VMs are preserved.
     --run-packer      Packer will be used for customization. Checks both base and packer VMIDs.
@@ -114,25 +112,21 @@ for arg in "$@"; do
     esac
 done
 
-# Parse build list and populate selected distros
+# Parse the build list into SELECTED_DISTROS. "all"/empty selects everything; a group
+# prefix (debian/ubuntu/fedora) selects its members; otherwise an individual id is matched.
+# Unknown items are warned about and ignored.
 SELECTED_DISTROS=""
 if [ -z "${BUILD_DISTROS}" ] || [ "${BUILD_DISTROS}" = "all" ]; then
-    SELECTED_DISTROS="${DISTRO_GROUPS[all]}"
+    SELECTED_DISTROS="${DISTRO_IDS[*]}"
 else
-    # Support comma or space separated list
-    items="$(echo "$BUILD_DISTROS" | tr ',' ' ')"
-    for item in $items; do
-        if [ -n "${DISTRO_GROUPS[$item]}" ]; then
-            # It's a group (debian, ubuntu, etc.)
-            SELECTED_DISTROS="${SELECTED_DISTROS} ${DISTRO_GROUPS[$item]}"
-        else
-            # Check if it's a valid individual distro ID
-            if [[ " debian11 debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2604 fedora42 fedora43 " == *" $item "* ]]; then
-                SELECTED_DISTROS="${SELECTED_DISTROS} $item"
-            else
-                echo "Warning: unknown build item '$item' - ignoring" >&2
+    for item in $(echo "$BUILD_DISTROS" | tr ',' ' '); do
+        matched=false
+        for id in "${DISTRO_IDS[@]}"; do
+            if [ "$id" = "$item" ] || [[ "$id" == "$item"* ]]; then
+                SELECTED_DISTROS="${SELECTED_DISTROS} $id"; matched=true
             fi
-        fi
+        done
+        [ "$matched" = false ] && echo "Warning: unknown build item '$item' - ignoring" >&2
     done
 fi
 
