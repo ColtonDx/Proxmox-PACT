@@ -127,6 +127,10 @@ else
     cd "$PACT_BOOTSTRAP_DIR" || exit 1
 fi
 
+# Repository root (parent of the Scripts dir). Companion files are resolved by absolute path
+# from here so build.sh works no matter what directory it is invoked from.
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 #####################################################################################
 ################### CLI OPTION PARSING
 #####################################################################################
@@ -170,7 +174,7 @@ for arg in "$@"; do
     esac
 done
 
-CONFIG_FILE_EXPANDED="${ANSWERFILE_PATH:-.env.local}"
+CONFIG_FILE_EXPANDED="${ANSWERFILE_PATH:-$REPO_DIR/.env.local}"
 # Expand a leading tilde in the path
 CONFIG_FILE_EXPANDED="${CONFIG_FILE_EXPANDED/#\~/$HOME}"
 CONFIG_LOADED=false
@@ -747,9 +751,9 @@ start_packer() {
     # Resolve the Packer template and Ansible files ONCE (downloading any URLs a single
     # time) and initialize Packer once, then reuse them for every selected distro instead
     # of re-downloading / re-initializing per VM.
-    local packerfile="${CUSTOM_PACKERFILE:-./Packer/Templates/universal.pkr.hcl}"
-    local ansiblefile="${CUSTOM_ANSIBLE_PLAYBOOK:-./Ansible/Playbooks/image_customizations.yml}"
-    local ansiblevarfile="${CUSTOM_ANSIBLE_VARFILE:-./Ansible/Variables/vars.yml}"
+    local packerfile="${CUSTOM_PACKERFILE:-$REPO_DIR/Packer/Templates/universal.pkr.hcl}"
+    local ansiblefile="${CUSTOM_ANSIBLE_PLAYBOOK:-$REPO_DIR/Ansible/Playbooks/image_customizations.yml}"
+    local ansiblevarfile="${CUSTOM_ANSIBLE_VARFILE:-$REPO_DIR/Ansible/Variables/vars.yml}"
 
     resolve_file_reference "$packerfile" "Packer template" || return 1
     packerfile="$RESOLVED_FILE"
