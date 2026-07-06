@@ -131,13 +131,21 @@ fi
 ################### CLI OPTION PARSING
 #####################################################################################
 
+# Detect whether we're running on a Proxmox host itself (its cluster filesystem or tools
+# are present). If so, default to local execution instead of SSH.
+ON_PROXMOX=false
+if [ -d /etc/pve ] || command -v pveversion &>/dev/null; then
+    ON_PROXMOX=true
+fi
+
 # Default flags and values (lowest precedence: the answerfile, then PACT_* env vars,
 # then CLI arguments each override these in turn)
 RUN_PACKER=false
 REBUILD_TEMPLATES=false
 INTERACTIVE_MODE=false
 SSH_PRIVATE_KEY_PATH=""
-PROXMOX_IS_REMOTE=true
+# On a Proxmox host, default to local execution; otherwise default to remote (SSH).
+if [ "$ON_PROXMOX" = true ]; then PROXMOX_IS_REMOTE=false; else PROXMOX_IS_REMOTE=true; fi
 CUSTOM_PACKERFILE=""
 CUSTOM_ANSIBLE_PLAYBOOK=""
 CUSTOM_ANSIBLE_VARFILE=""
@@ -455,13 +463,23 @@ if [ "$INTERACTIVE_MODE" = true ]; then
         VMID_BASE="$vmid_input"
     fi
 
-    # Q4: Ask if Proxmox is remote
+    # Q4: Ask if Proxmox is remote (defaults to No when we're on a Proxmox host)
     echo ""
-    read -p "Is the Proxmox server remote? (Y/N) [Default: Yes]: " -r choice_remote
-    if [[ "$choice_remote" =~ ^[Nn]$ ]]; then
-        PROXMOX_IS_REMOTE=false
+    if [ "$ON_PROXMOX" = true ]; then
+        echo "This appears to be a Proxmox host, so local execution is the default."
+        read -p "Is the Proxmox server remote (build from here over SSH instead)? (Y/N) [Default: No]: " -r choice_remote
+        if [[ "$choice_remote" =~ ^[Yy]$ ]]; then
+            PROXMOX_IS_REMOTE=true
+        else
+            PROXMOX_IS_REMOTE=false
+        fi
     else
-        PROXMOX_IS_REMOTE=true
+        read -p "Is the Proxmox server remote? (Y/N) [Default: Yes]: " -r choice_remote
+        if [[ "$choice_remote" =~ ^[Nn]$ ]]; then
+            PROXMOX_IS_REMOTE=false
+        else
+            PROXMOX_IS_REMOTE=true
+        fi
     fi
 
     # Ask Proxmox settings only if remote
@@ -609,6 +627,9 @@ if [ -z "$SELECTED_DISTROS" ]; then
 fi
 
 # Display configuration
+if [ "$ON_PROXMOX" = true ] && [ "$PROXMOX_IS_REMOTE" = false ]; then
+    echo "Note: detected a Proxmox host - executing locally (no SSH)."
+fi
 echo "Build Configuration:"
 echo "  Proxmox Host: $PROXMOX_HOST"
 echo "  Proxmox SSH User: $PROXMOX_SSH_USER"
@@ -795,6 +816,20 @@ if [ -n "$PACKAGES" ]; then
 
     # Only install if there are packages to install
     if [ "${#PACKAGES_TO_INSTALL[@]}" -gt 0 ]; then
+        echo ""
+        echo "The following packages will be installed on THIS machine ($(hostname)): ${PACKAGES_TO_INSTALL[*]}"
+        if [ "$ON_PROXMOX" = true ]; then
+            echo "Warning: this appears to be your Proxmox host. Installing Packer/Ansible" >&2
+            echo "         directly on Proxmox is NOT recommended - prefer running build.sh from a" >&2
+            echo "         separate management machine." >&2
+            if [ -t 0 ]; then
+                read -p "Continue installing these on the Proxmox host anyway? (y/N): " -r _okinstall
+                if [[ ! "$_okinstall" =~ ^[Yy]$ ]]; then
+                    echo "Aborted. Re-run from a management machine, or pre-install the tools." >&2
+                    exit 1
+                fi
+            fi
+        fi
         echo "Installing required packages: ${PACKAGES_TO_INSTALL[*]}"
         case "$OS" in
             ubuntu|debian)
