@@ -147,6 +147,7 @@ fi
 RUN_PACKER=false
 REBUILD_TEMPLATES=false
 INTERACTIVE_MODE=false
+DRY_RUN=false
 SSH_PRIVATE_KEY_PATH=""
 # On a Proxmox host, default to local execution; otherwise default to remote (SSH).
 if [ "$ON_PROXMOX" = true ]; then PROXMOX_IS_REMOTE=false; else PROXMOX_IS_REMOTE=true; fi
@@ -273,6 +274,7 @@ Options:
   --proxmox-storage=POOL     Proxmox storage pool name (default: local-lvm).
   --proxmox-target-node=NODE Proxmox target node for Packer (default: pve).
   --local                    Run directly on Proxmox host (no SSH needed).
+  --dry-run                  Print the resolved plan (target, VMIDs, files) and exit.
   --build-distros=LIST       Comma-separated list of distros to build (e.g., debian12,ubuntu2404).
   --answerfile-path=PATH     Path to custom answerfile (.env.local used by default if exists).
   --custom-packerfile=PATH   Path or URL to custom Packer template file instead of default.
@@ -329,6 +331,9 @@ for arg in "$@"; do
             ;;
         --local)
             PROXMOX_IS_REMOTE=false
+            ;;
+        --dry-run)
+            DRY_RUN=true
             ;;
         --build-distros=*)
             BUILD_DISTROS="${arg#*=}"
@@ -681,6 +686,23 @@ if [ "$RUN_PACKER" = true ]; then
     [ -n "$CUSTOM_ANSIBLE_VARFILE" ]  && echo "  Custom Ansible varfile: $CUSTOM_ANSIBLE_VARFILE"
 fi
 echo ""
+
+# --dry-run: show the resolved plan and exit before doing anything.
+if [ "$DRY_RUN" = true ]; then
+    echo "Planned templates (VMID base $VMID_BASE):"
+    for distro_id in "${DISTRO_IDS[@]}"; do
+        [[ " $SELECTED_DISTROS " == *" $distro_id "* ]] || continue
+        offset="${DISTRO_OFFSET[$distro_id]}"
+        if [ "$RUN_PACKER" = true ]; then
+            echo "  ${DISTRO_NAME[$distro_id]}: base $((VMID_BASE + offset)) -> Packer $((VMID_BASE + 100 + offset))"
+        else
+            echo "  ${DISTRO_NAME[$distro_id]}: $((VMID_BASE + offset))"
+        fi
+    done
+    echo ""
+    echo "Dry run - no changes made."
+    exit 0
+fi
 
 #####################################################################################
 ###################FUNCTIONS
