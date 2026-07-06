@@ -684,9 +684,9 @@ echo ""
 # reading commands from stdin (used for the build heredoc below).
 pve_ssh() {
     if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
-        ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" "$@"
+        ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=15 "$PROXMOX_SSH_USER@$PROXMOX_HOST" "$@"
     else
-        sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" "$@"
+        sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 "$PROXMOX_SSH_USER@$PROXMOX_HOST" "$@"
     fi
 }
 
@@ -694,9 +694,9 @@ pve_ssh() {
 pve_scp() {
     local src="$1" dest="$2"
     if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
-        scp -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$src" "$PROXMOX_SSH_USER@$PROXMOX_HOST:$dest"
+        scp -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=15 "$src" "$PROXMOX_SSH_USER@$PROXMOX_HOST:$dest"
     else
-        sshpass -p "$PROXMOX_SSH_PASSWORD" scp -o StrictHostKeyChecking=no "$src" "$PROXMOX_SSH_USER@$PROXMOX_HOST:$dest"
+        sshpass -p "$PROXMOX_SSH_PASSWORD" scp -o StrictHostKeyChecking=no -o ConnectTimeout=15 "$src" "$PROXMOX_SSH_USER@$PROXMOX_HOST:$dest"
     fi
 }
 
@@ -816,82 +816,62 @@ fi
 ###################REQUIREMENTS
 #####################################################################################
 
-# Determine which host packages we actually need, based on what this run will do:
-#   - sshpass: only for remote password authentication (not key auth, not local mode)
-#   - unzip/git/curl/ansible: whenever Packer runs, local or remote
-PACKAGES=""
-if [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ]; then
-    PACKAGES="sshpass"
-fi
-if [ "$RUN_PACKER" = true ]; then
-    PACKAGES="$PACKAGES unzip git curl ansible"
-fi
-
-if [ -n "$PACKAGES" ]; then
-
-    # A tool is "missing" if its command isn't on PATH. Every package we need here has
-    # a same-named command, so this avoids substring false positives (e.g. dpkg -l | grep
-    # curl matching libcurl4) and needs no per-distro detection logic.
-    PACKAGES_TO_INSTALL=()
-    for pkg in $PACKAGES; do
-        if ! command -v "$pkg" &> /dev/null; then
-            PACKAGES_TO_INSTALL+=("$pkg")
-        fi
+# Install the given packages that aren't already on PATH (command name == package name
+# for everything we need here, which avoids dpkg/rpm substring false positives).
+install_pkgs() {
+    local want=("$@") missing=() pkg
+    for pkg in "${want[@]}"; do
+        command -v "$pkg" &>/dev/null || missing+=("$pkg")
     done
+    [ "${#missing[@]}" -eq 0 ] && return 0
+    echo "Installing on $(hostname): ${missing[*]}"
+    case "$OS" in
+        ubuntu|debian) sudo apt-get update >/dev/null 2>&1; sudo apt-get install -y "${missing[@]}" ;;
+        centos|rocky|almalinux|fedora|rhel) sudo dnf install -y "${missing[@]}" ;;
+        opensuse|sles) sudo zypper install -y "${missing[@]}" ;;
+        *) echo "Error: unsupported distribution '$OS'; install manually: ${missing[*]}" >&2; return 1 ;;
+    esac || { echo "Error: failed to install: ${missing[*]}" >&2; return 1; }
+}
 
-    # Only install if there are packages to install
-    if [ "${#PACKAGES_TO_INSTALL[@]}" -gt 0 ]; then
-        echo ""
-        echo "The following packages will be installed on THIS machine ($(hostname)): ${PACKAGES_TO_INSTALL[*]}"
-        if [ "$ON_PROXMOX" = true ]; then
-            echo "Warning: this appears to be your Proxmox host. Installing Packer/Ansible" >&2
-            echo "         directly on Proxmox is NOT recommended - prefer running build.sh from a" >&2
-            echo "         separate management machine." >&2
-            if [ -t 0 ]; then
-                read -p "Continue installing these on the Proxmox host anyway? (y/N): " -r _okinstall
-                if [[ ! "$_okinstall" =~ ^[Yy]$ ]]; then
-                    echo "Aborted. Re-run from a management machine, or pre-install the tools." >&2
-                    exit 1
-                fi
-            fi
-        fi
-        echo "Installing required packages: ${PACKAGES_TO_INSTALL[*]}"
-        case "$OS" in
-            ubuntu|debian)
-                sudo apt-get update > /dev/null 2>&1
-                if ! sudo apt-get install -y "${PACKAGES_TO_INSTALL[@]}"; then
-                    echo "Error: Failed to install packages. Please install manually: ${PACKAGES_TO_INSTALL[*]}" >&2
-                    exit 1
-                fi
-                ;;
-            centos|rocky|almalinux|fedora|rhel)
-                if ! sudo dnf install -y "${PACKAGES_TO_INSTALL[@]}"; then
-                    echo "Error: Failed to install packages. Please install manually: ${PACKAGES_TO_INSTALL[*]}" >&2
-                    exit 1
-                fi
-                ;;
-            opensuse|sles)
-                if ! sudo zypper install -y "${PACKAGES_TO_INSTALL[@]}"; then
-                    echo "Error: Failed to install packages. Please install manually: ${PACKAGES_TO_INSTALL[*]}" >&2
-                    exit 1
-                fi
-                ;;
-            *)
-                echo "Unsupported distribution: $OS"
-                exit 1
-                ;;
-        esac
-    else
-        echo "All required packages are already installed."
+# Warn (and, on a TTY, confirm) before installing tooling on what looks like a Proxmox host.
+warn_local_install() {
+    [ "$ON_PROXMOX" != true ] && return 0
+    echo "Warning: this appears to be your Proxmox host. Installing $* here is NOT recommended;" >&2
+    echo "         prefer running build.sh from a separate management machine." >&2
+    if [ -t 0 ]; then
+        read -p "Continue installing on the Proxmox host anyway? (y/N): " -r _ok
+        [[ "$_ok" =~ ^[Yy]$ ]] || { echo "Aborted." >&2; exit 1; }
     fi
+}
+
+# For remote password auth we need sshpass just to reach the host. Install that first (it's
+# tiny) so the connectivity preflight below runs before the heavier toolchain / downloads.
+if [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ] && ! command -v sshpass &>/dev/null; then
+    warn_local_install "sshpass"
+    install_pkgs sshpass || exit 1
+    command -v sshpass &>/dev/null || { echo "Error: sshpass is required for password auth but is not installed." >&2; exit 1; }
 fi
 
-# Verify sshpass is available for remote password authentication (not needed with a key).
-if [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ]; then
-    if ! command -v sshpass &> /dev/null; then
-        echo "Error: sshpass is required for SSH password authentication but is not installed" >&2
+# Preflight: confirm we can reach Proxmox and that 'qm' exists BEFORE installing the build
+# toolchain or downloading any images, so a bad host/credentials/target fails in seconds.
+if [ "$PROXMOX_IS_REMOTE" = true ]; then
+    echo "Checking connectivity to $PROXMOX_SSH_USER@$PROXMOX_HOST ..."
+    if ! pve_ssh 'command -v qm >/dev/null 2>&1'; then
+        echo "Error: cannot reach $PROXMOX_SSH_USER@$PROXMOX_HOST over SSH, or 'qm' is not available there." >&2
+        echo "Check the hostname/credentials and that the target is a Proxmox host." >&2
         exit 1
     fi
+    echo "Connected to Proxmox ('qm' found)."
+elif ! command -v qm &>/dev/null; then
+    echo "Error: running locally but 'qm' was not found - is this a Proxmox host?" >&2
+    echo "Use the SSH options (e.g. --proxmox-host=...) to target a remote Proxmox instead." >&2
+    exit 1
+fi
+
+# Install the (heavier) Packer/Ansible toolchain now that connectivity is confirmed.
+if [ "$RUN_PACKER" = true ]; then
+    warn_local_install "Packer and Ansible"
+    install_pkgs unzip git curl ansible || exit 1
 fi
 
 # Install Packer only if --run-packer option is enabled (regardless of local or remote)
