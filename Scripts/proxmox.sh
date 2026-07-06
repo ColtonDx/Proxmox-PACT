@@ -62,7 +62,7 @@ declare -a DISTRO_METADATA=(
     "ubuntu2404|Ubuntu-2404|12|ubuntu-2404-template.img|https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
     "ubuntu2604|Ubuntu-2604|14|ubuntu-2604-template.img|https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img"
     "fedora43|Fedora-43|23|fedora-43-template.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2"
-    "fedora44|Fedora-44|24|fedora-44-template.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.1.x86_64.qcow2"
+    "fedora44|Fedora-44|24|fedora-44-template.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
 )
 
 # List of known distro ids, derived from DISTRO_METADATA above (single source of truth).
