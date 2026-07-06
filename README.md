@@ -70,6 +70,22 @@ After base templates are created (regardless of whether SSH or Ansible mode was 
 
 ### Quick Setup
 
+**One-liner** (clone and launch interactive mode in a single command):
+
+```bash
+git clone https://github.com/ColtonDx/Proxmox-P.A.C.T..git && cd Proxmox-P.A.C.T. && bash Scripts/build.sh --interactive
+```
+
+Non-interactive variant (pass your own settings):
+
+```bash
+git clone https://github.com/ColtonDx/Proxmox-P.A.C.T..git && cd Proxmox-P.A.C.T. && \
+  bash Scripts/build.sh --proxmox-host=pve.local --proxmox-ssh-user=root \
+    --proxmox-ssh-password="your_password" --proxmox-storage=local-lvm
+```
+
+Or step by step:
+
 1. **Clone the Repository**
 
    ```bash
@@ -110,7 +126,7 @@ Choose which Linux distributions to create templates for. Options include:
 - `all` - Create templates for all supported distros
 - `debian` - All Debian versions (11, 12, 13)
 - `ubuntu` - All Ubuntu versions (22.04, 24.04, 26.04)
-- `fedora` - All Fedora versions (41, 42)
+- `fedora` - All Fedora versions (43, 44)
 - Individual names: `debian11`, `debian12`, `debian13`, `ubuntu2204`, `ubuntu2404`, `ubuntu2604`, `fedora43`, `fedora44`
 
 Example: `debian12,ubuntu2404,fedora43` to create only Debian 12, Ubuntu 24.04, and Fedora 43 templates
