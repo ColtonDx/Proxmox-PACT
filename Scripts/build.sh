@@ -655,6 +655,13 @@ if [ -z "$SELECTED_DISTROS" ]; then
     exit 1
 fi
 
+# Validate the VMID base is numeric (proxmox.sh does arithmetic with it).
+if ! [[ "$VMID_BASE" =~ ^[0-9]+$ ]]; then
+    echo "Error: VMID base must be a positive number (got '$VMID_BASE')." >&2
+    echo "Set it via PACT_VMID_BASE, the answerfile (VMID_BASE=), or interactive mode." >&2
+    exit 1
+fi
+
 # Display configuration
 if [ "$ON_PROXMOX" = true ] && [ "$PROXMOX_IS_REMOTE" = false ]; then
     echo "Note: detected a Proxmox host - executing locally (no SSH)."
@@ -866,10 +873,18 @@ if [ "$PROXMOX_IS_REMOTE" = true ]; then
         exit 1
     fi
     echo "Connected to Proxmox ('qm' found)."
-elif ! command -v qm &>/dev/null; then
-    echo "Error: running locally but 'qm' was not found - is this a Proxmox host?" >&2
-    echo "Use the SSH options (e.g. --proxmox-host=...) to target a remote Proxmox instead." >&2
-    exit 1
+    if pve_ssh "command -v pvesm >/dev/null 2>&1 && ! pvesm status --storage $PROXMOX_STORAGE >/dev/null 2>&1"; then
+        echo "Warning: storage pool '$PROXMOX_STORAGE' was not found on the Proxmox host; the build may fail." >&2
+    fi
+else
+    if ! command -v qm &>/dev/null; then
+        echo "Error: running locally but 'qm' was not found - is this a Proxmox host?" >&2
+        echo "Use the SSH options (e.g. --proxmox-host=...) to target a remote Proxmox instead." >&2
+        exit 1
+    fi
+    if command -v pvesm >/dev/null 2>&1 && ! pvesm status --storage "$PROXMOX_STORAGE" >/dev/null 2>&1; then
+        echo "Warning: storage pool '$PROXMOX_STORAGE' was not found; the build may fail." >&2
+    fi
 fi
 
 # Install the (heavier) Packer/Ansible toolchain now that connectivity is confirmed.
