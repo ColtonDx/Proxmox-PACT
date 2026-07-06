@@ -667,19 +667,6 @@ resolve_file_reference() {
             return 1
         fi
 
-        # A 200 response can still be an HTML login/error page (e.g. a private repo or a
-        # web-view Git URL) rather than the file itself. curl -f only rejects HTTP error
-        # codes, so catch HTML here and fail with a clear message instead of handing a
-        # bogus playbook/varfile to Packer and Ansible.
-        if head -c 512 "$temp_file" | grep -qiE '<!doctype html|<html[ >]'; then
-            echo "Error: $ref returned an HTML page, not a file, for $name." >&2
-            echo "       Use the RAW file URL (GitLab: .../-/raw/<branch>/<path>; GitHub:" >&2
-            echo "       raw.githubusercontent.com/...) and make sure the repo is public or the" >&2
-            echo "       URL carries an access token." >&2
-            rm -f "$temp_file"
-            return 1
-        fi
-
         PACT_TMP_FILES+=("$temp_file")
         RESOLVED_FILE="$temp_file"
     else
