@@ -78,8 +78,54 @@
 # Generate a unique working directory name to avoid conflicts
 WORK_DIR_NAME="pact_build_$(date +%s)_${RANDOM}"
 
-# Directory containing this script (used to read distro metadata from proxmox.sh)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Number of CLI args the user passed (used to decide whether to show the bootstrap prompt).
+PACT_ARGC=$#
+
+# Directory containing this script (empty when curl-piped via process substitution).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
+
+# Base URL for fetching companion files (proxmox.sh, the Packer template, the Ansible
+# files) when build.sh is run standalone (curl-piped) instead of from a clone. PACT_REF
+# defaults to main; the README bootstrap one-liner overrides it to the current branch
+# until this is merged. Both are overridable via the environment.
+PACT_REF="${PACT_REF:-main}"
+PACT_BASE_URL="${PACT_BASE_URL:-https://raw.githubusercontent.com/ColtonDx/Proxmox-P.A.C.T./$PACT_REF}"
+
+# Cleanup for URL-download temp files and the bootstrap working tree (single EXIT trap;
+# resolve_file_reference must NOT set its own trap, as an in-function trap inside a command
+# substitution would fire and delete the download the moment it returned).
+PACT_TMP_FILES=()
+PACT_BOOTSTRAP_DIR=""
+cleanup() {
+    [ "${#PACT_TMP_FILES[@]}" -gt 0 ] && rm -f "${PACT_TMP_FILES[@]}"
+    [ -n "$PACT_BOOTSTRAP_DIR" ] && rm -rf "$PACT_BOOTSTRAP_DIR"
+}
+trap cleanup EXIT
+
+# Clone vs standalone. When standalone, download the companion files into a temp working
+# tree and cd into it so the rest of the script behaves exactly as it would from a clone.
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/proxmox.sh" ]; then
+    RUNNING_FROM_CLONE=true
+else
+    RUNNING_FROM_CLONE=false
+    PACT_BOOTSTRAP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pact_bootstrap.XXXXXX")"
+    echo "Bootstrapping companion files from $PACT_BASE_URL ..."
+    mkdir -p "$PACT_BOOTSTRAP_DIR/Scripts" \
+             "$PACT_BOOTSTRAP_DIR/Packer/Templates" \
+             "$PACT_BOOTSTRAP_DIR/Ansible/Playbooks" \
+             "$PACT_BOOTSTRAP_DIR/Ansible/Variables"
+    for _f in Scripts/proxmox.sh \
+              Packer/Templates/universal.pkr.hcl \
+              Ansible/Playbooks/image_customizations.yml \
+              Ansible/Variables/vars.yml; do
+        if ! curl -fsSL "$PACT_BASE_URL/$_f" -o "$PACT_BOOTSTRAP_DIR/$_f"; then
+            echo "Error: failed to fetch $_f from $PACT_BASE_URL" >&2
+            exit 1
+        fi
+    done
+    SCRIPT_DIR="$PACT_BOOTSTRAP_DIR/Scripts"
+    cd "$PACT_BOOTSTRAP_DIR" || exit 1
+fi
 
 #####################################################################################
 ################### CLI OPTION PARSING
@@ -119,10 +165,12 @@ done
 CONFIG_FILE_EXPANDED="${ANSWERFILE_PATH:-.env.local}"
 # Expand a leading tilde in the path
 CONFIG_FILE_EXPANDED="${CONFIG_FILE_EXPANDED/#\~/$HOME}"
+CONFIG_LOADED=false
 if [ -f "$CONFIG_FILE_EXPANDED" ]; then
     echo "Loading configuration from $CONFIG_FILE_EXPANDED..."
     # shellcheck source=/dev/null
     source "$CONFIG_FILE_EXPANDED"
+    CONFIG_LOADED=true
 fi
 
 #####################################################################################
@@ -333,6 +381,44 @@ fi
 : "${PROXMOX_TARGET_NODE:=pve}"
 : "${PROXMOX_STORAGE:=local-lvm}"
 : "${VMID_BASE:=800}"
+
+#####################################################################################
+# BOOTSTRAP PROMPT (only when run with no args and no config): offer interactive
+# mode, or let the user point at an answerfile / custom playbook + varfile.
+#####################################################################################
+if [ "$PACT_ARGC" -eq 0 ] && [ "$INTERACTIVE_MODE" = false ] && [ "$CONFIG_LOADED" = false ] && [ -t 0 ]; then
+    echo ""
+    read -p "No configuration found. Continue in interactive mode? [Y/n]: " -r _gate
+    if [[ "$_gate" =~ ^[Nn]$ ]]; then
+        read -p "  Answerfile path or URL (blank to skip): " -r _af
+        if [ -n "$_af" ]; then
+            if [[ "$_af" =~ ^https?:// ]]; then
+                _aftmp="$(mktemp)"
+                PACT_TMP_FILES+=("$_aftmp")
+                if ! curl -fsSL "$_af" -o "$_aftmp"; then
+                    echo "Error: failed to download answerfile from $_af" >&2
+                    exit 1
+                fi
+                # shellcheck source=/dev/null
+                source "$_aftmp"
+            else
+                _af="${_af/#\~/$HOME}"
+                if [ ! -f "$_af" ]; then
+                    echo "Error: answerfile not found: $_af" >&2
+                    exit 1
+                fi
+                # shellcheck source=/dev/null
+                source "$_af"
+            fi
+        fi
+        read -p "  Custom Ansible playbook URL/path (blank to skip): " -r _cap
+        [ -n "$_cap" ] && CUSTOM_ANSIBLE_PLAYBOOK="$_cap"
+        read -p "  Custom Ansible varfile URL/path (blank to skip): " -r _cav
+        [ -n "$_cav" ] && CUSTOM_ANSIBLE_VARFILE="$_cav"
+    else
+        INTERACTIVE_MODE=true
+    fi
+fi
 
 #####################################################################################
 # INTERACTIVE MODE
@@ -555,15 +641,7 @@ pve_scp() {
 ################### HELPER FUNCTION FOR URL/PATH RESOLUTION
 #####################################################################################
 
-# Temp files created when custom Packer/Ansible files are passed as URLs. They are
-# cleaned up by a single EXIT trap (see below); resolve_file_reference must NOT set its
-# own trap, because it is called in the current shell and an in-function trap set inside
-# a command substitution would fire — and delete the download — the moment it returned.
-PACT_TMP_FILES=()
-cleanup_tmp_files() {
-    [ "${#PACT_TMP_FILES[@]}" -gt 0 ] && rm -f "${PACT_TMP_FILES[@]}"
-}
-trap cleanup_tmp_files EXIT
+# (URL-download temp files are cleaned by the top-level cleanup()/EXIT trap.)
 
 # Resolve a file reference that can be either a URL or a local path.
 # For a URL it downloads to a temp file (tracked in PACT_TMP_FILES for cleanup); for a
@@ -804,11 +882,19 @@ if [ "$PROXMOX_IS_REMOTE" = true ]; then
         echo "Starting build using password authentication"
     fi
 
-    # Copy proxmox.sh into a unique working directory on the host and run it there.
+    # Put proxmox.sh into a unique working directory on the host and run it there. From a
+    # clone we scp our (possibly locally edited) copy; when bootstrapped we have the host
+    # curl it straight from PACT_BASE_URL (it already needs outbound HTTPS for the images).
     pve_ssh mkdir -p "./$WORK_DIR_NAME"
-    pve_scp ./Scripts/proxmox.sh "./$WORK_DIR_NAME"
-    # shellcheck disable=SC2087  # heredoc is expanded locally on purpose to inject the build args
+    if [ "$RUNNING_FROM_CLONE" = true ]; then
+        pve_scp "$SCRIPT_DIR/proxmox.sh" "./$WORK_DIR_NAME"
+        remote_fetch=":"
+    else
+        remote_fetch="curl -fsSL $PACT_BASE_URL/Scripts/proxmox.sh -o ./$WORK_DIR_NAME/proxmox.sh"
+    fi
+    # shellcheck disable=SC2087  # heredoc is expanded locally on purpose to inject the fetch + build args
     pve_ssh << EOF
+        $remote_fetch
         chmod +x ./$WORK_DIR_NAME/proxmox.sh
         ./$WORK_DIR_NAME/proxmox.sh ${PROXMOX_SCRIPT_ARGS[*]}
         proxmox_rc=\$?
@@ -842,7 +928,7 @@ else
 
     # Create unique local working directory and run
     mkdir -p "./$WORK_DIR_NAME"
-    cp ./Scripts/proxmox.sh "./$WORK_DIR_NAME/"
+    cp "$SCRIPT_DIR/proxmox.sh" "./$WORK_DIR_NAME/"
     chmod +x "./$WORK_DIR_NAME/proxmox.sh"
 
     "./$WORK_DIR_NAME/proxmox.sh" "${PROXMOX_SCRIPT_ARGS[@]}"

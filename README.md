@@ -70,6 +70,20 @@ After base templates are created (regardless of whether SSH or Ansible mode was 
 
 ### Quick Setup
 
+**Zero-clone bootstrap** (nothing to download first — `build.sh` fetches everything it needs and prompts you):
+
+```bash
+PACT_REF=claude/pre-release-test-validation-w5ggtr bash <(curl -fsSL https://raw.githubusercontent.com/ColtonDx/Proxmox-P.A.C.T./claude/pre-release-test-validation-w5ggtr/Scripts/build.sh)
+```
+
+Once this is merged to `main`, the command simplifies to:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ColtonDx/Proxmox-P.A.C.T./main/Scripts/build.sh)
+```
+
+Run with no arguments, it asks whether to continue in interactive mode; answer `n` to point it at an answerfile (local path or URL) plus optional custom playbook/varfile URLs. On the Proxmox side it has the host pull `proxmox.sh` directly instead of copying it over SSH. Use `bash <(curl …)` (process substitution) rather than `curl … | bash` so the interactive prompts keep working.
+
 **One-liner** (clone and launch interactive mode in a single command):
 
 ```bash
