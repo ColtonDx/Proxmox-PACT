@@ -58,9 +58,31 @@ automatically.
 | `--proxmox-storage=POOL` | Storage pool (default `local-lvm`) |
 | `--build-distros=LIST` | `all`, a family (`debian`/`ubuntu`/`fedora`), or names |
 | `--run-packer` | Enable Packer customization (needs API token flags) |
+| `--customize-cloudinit` | Bake a default username/password/SSH key into the templates |
 | `--dry-run` | Print the plan and exit — no host or credentials needed |
 
 Full flag list and answerfile settings: **[CLI Reference](../../wiki/CLI-Reference)**.
+
+## Cloud-Init customization
+
+By default, templates ship with an empty Cloud-Init drive — you set the username,
+password, and SSH keys per-VM from the Proxmox UI when you clone one. If you'd rather
+bake defaults into the templates themselves, pass `--customize-cloudinit` plus any of:
+
+| Flag | Answerfile var | Meaning |
+|------|----------------|---------|
+| `--cloudinit-user=USER` | `CLOUDINIT_USER` | Default Cloud-Init username |
+| `--cloudinit-password=PASS` | `CLOUDINIT_PASSWORD` | Default password — **stored in plaintext** in each VM's Proxmox config (`qm config`); prefer SSH keys |
+| `--cloudinit-ssh-keys=KEY` | `CLOUDINIT_SSH_KEYS` | A literal SSH public key to inject |
+| `--cloudinit-ssh-key-file=PATH` | `CLOUDINIT_SSH_KEY_FILE` | Path to a file of SSH public keys (one per line); mutually exclusive with the literal form |
+
+At least one value is required when `--customize-cloudinit` is set. You can also omit
+the values and answer prompts instead — `--interactive` mode asks for them, and running
+without enough values on a terminal (e.g. `--customize-cloudinit` alone) prompts for
+them too. These settings are global for a given run (the same values apply to every
+distro you build) and can be combined with any of the standard config methods: CLI
+flags, `PACT_CUSTOMIZE_CLOUDINIT` / `PACT_CLOUDINIT_*` env vars, or the `.env.local`
+answerfile.
 
 ## Examples
 

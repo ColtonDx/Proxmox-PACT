@@ -20,7 +20,15 @@
 #   --rebuild-templates            Delete existing VMs before building (destructive)
 #   --run-packer                Packer will customize templates after creation
 #                               Also accepts: --packer-enabled (for backward compatibility)
+#   --customize-cloudinit       Apply Cloud-Init defaults (username/password/SSH key) to templates
+#   --cloudinit-user=USER       Cloud-Init default username (requires --customize-cloudinit)
+#   --cloudinit-password=PASS  Cloud-Init default password (stored in plaintext by Proxmox; SSH keys are safer)
+#   --cloudinit-ssh-key-file=PATH  Local path (on this host) to a file of SSH public keys, one per line
 #   --help                      Display help message
+#
+# When run remotely by build.sh, the Cloud-Init password and SSH keys are instead passed
+# via PACT_CI_USER_B64/PACT_CI_PASSWORD_B64/PACT_CI_SSHKEYS_B64 environment variables
+# (base64-encoded so arbitrary content survives the SSH command line intact).
 #
 # Distro Options:
 #   Individual: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora43, fedora44
@@ -86,6 +94,10 @@ Options:
     --rebuild-templates     Delete existing VMs at target VMIDs before building (destructive).
                       Without this flag, existing VMs are preserved.
     --run-packer      Packer will be used for customization. Checks both base and packer VMIDs.
+    --customize-cloudinit    Apply Cloud-Init defaults (username/password/SSH key) to created templates.
+    --cloudinit-user=USER    Cloud-Init default username (requires --customize-cloudinit).
+    --cloudinit-password=PASS  Cloud-Init default password (plaintext in the VM config; SSH keys are safer).
+    --cloudinit-ssh-key-file=PATH  Local path to a file of SSH public keys, one per line.
     --help            Show this help and exit
 EOF
 }
@@ -96,6 +108,19 @@ PROXMOX_STORAGE="${PROXMOX_STORAGE:-$DEFAULT_PROXMOX_STORAGE}"
 BUILD_DISTROS="all"
 REBUILD_TEMPLATES=false
 RUN_PACKER=false
+CUSTOMIZE_CLOUDINIT=false
+CLOUDINIT_USER=""
+CLOUDINIT_PASSWORD=""
+CLOUDINIT_SSH_KEYS=""
+CLOUDINIT_SSH_KEY_FILE=""
+
+# When build.sh drives this script over SSH, Cloud-Init password/SSH key content is handed
+# off via base64-encoded environment variables (set right before this script runs) rather
+# than CLI arguments, so arbitrary content (spaces, newlines) survives the SSH command line
+# intact. CLI arguments (parsed below) still take precedence for direct/manual invocation.
+[ -n "${PACT_CI_USER_B64:-}" ]     && CLOUDINIT_USER="$(printf '%s' "$PACT_CI_USER_B64" | base64 -d)"
+[ -n "${PACT_CI_PASSWORD_B64:-}" ] && CLOUDINIT_PASSWORD="$(printf '%s' "$PACT_CI_PASSWORD_B64" | base64 -d)"
+[ -n "${PACT_CI_SSHKEYS_B64:-}" ]  && CLOUDINIT_SSH_KEYS="$(printf '%s' "$PACT_CI_SSHKEYS_B64" | base64 -d)"
 
 for arg in "$@"; do
     case "$arg" in
@@ -107,10 +132,29 @@ for arg in "$@"; do
         --rebuild-templates) REBUILD_TEMPLATES=true ;;
         --run-packer) RUN_PACKER=true ;;
         --packer-enabled) RUN_PACKER=true ;;
+        --customize-cloudinit) CUSTOMIZE_CLOUDINIT=true ;;
+        --cloudinit-user=*) CLOUDINIT_USER="${arg#*=}" ;;
+        --cloudinit-password=*) CLOUDINIT_PASSWORD="${arg#*=}" ;;
+        --cloudinit-ssh-key-file=*) CLOUDINIT_SSH_KEY_FILE="${arg#*=}" ;;
         --help) print_usage; exit 0 ;;
         *) echo "Unknown option: $arg"; print_usage; exit 1 ;;
     esac
 done
+
+# A local key file (only meaningful when this script is invoked directly on the host that
+# has it; build.sh always sends key content via PACT_CI_SSHKEYS_B64 instead) overrides any
+# key content picked up above.
+if [ -n "$CLOUDINIT_SSH_KEY_FILE" ]; then
+    if [ ! -f "$CLOUDINIT_SSH_KEY_FILE" ]; then
+        echo "Error: Cloud-Init SSH key file not found: $CLOUDINIT_SSH_KEY_FILE" >&2
+        exit 1
+    fi
+    CLOUDINIT_SSH_KEYS="$(cat "$CLOUDINIT_SSH_KEY_FILE")"
+fi
+
+if [ "$CUSTOMIZE_CLOUDINIT" = true ] && [ -n "$CLOUDINIT_PASSWORD" ]; then
+    echo "Warning: Cloud-Init default password will be stored in PLAINTEXT in each VM's Proxmox config (qm config <vmid>). Prefer SSH keys where possible." >&2
+fi
 
 # Parse the build list into SELECTED_DISTROS. "all"/empty selects everything; a group
 # prefix (debian/ubuntu/fedora) selects its members; otherwise an individual id is matched.
@@ -133,7 +177,7 @@ fi
 # Remove duplicates and normalize spacing
 SELECTED_DISTROS="$(echo "$SELECTED_DISTROS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)"
 
-echo "Using VMID_BASE=${VMID_BASE}, storage=${PROXMOX_STORAGE}, build='${BUILD_DISTROS}', selected='${SELECTED_DISTROS}', rebuild-templates=${REBUILD_TEMPLATES}, run-packer=${RUN_PACKER}"
+echo "Using VMID_BASE=${VMID_BASE}, storage=${PROXMOX_STORAGE}, build='${BUILD_DISTROS}', selected='${SELECTED_DISTROS}', rebuild-templates=${REBUILD_TEMPLATES}, run-packer=${RUN_PACKER}, customize-cloudinit=${CUSTOMIZE_CLOUDINIT}"
 
 # Create and configure a VM template
 create_template() {
@@ -172,6 +216,15 @@ create_template() {
     qm set "$vmid" --boot order=scsi0 --scsihw virtio-scsi-single
     qm set "$vmid" --agent enabled=1,fstrim_cloned_disks=1
     qm set "$vmid" --ide3 "${proxmox_storage}:cloudinit"
+
+    # Optional Cloud-Init defaults (username/password/SSH key) baked into the template so
+    # every VM cloned from it picks them up unless overridden in the Proxmox UI at clone time.
+    if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
+        [ -n "$CLOUDINIT_USER" ] && qm set "$vmid" --ciuser "$CLOUDINIT_USER"
+        [ -n "$CLOUDINIT_PASSWORD" ] && qm set "$vmid" --cipassword "$CLOUDINIT_PASSWORD"
+        [ -n "$CLOUDINIT_SSHKEYS_FILE" ] && qm set "$vmid" --sshkeys "$CLOUDINIT_SSHKEYS_FILE"
+    fi
+
     qm disk resize "$vmid" scsi0 8G
     qm template "$vmid"
 }
@@ -222,6 +275,14 @@ mkdir -p "$WORKING_DIR"
 # The downloaded cloud images are imported into Proxmox storage during template creation,
 # so remove them (and the working dir) when we exit — on success or failure.
 trap 'rm -rf "$WORKING_DIR"' EXIT
+
+# `qm set --sshkeys` reads its keys from a file (one OpenSSH public key per line), so write
+# the resolved key content out once and reuse the same file for every selected distro.
+CLOUDINIT_SSHKEYS_FILE=""
+if [ "$CUSTOMIZE_CLOUDINIT" = true ] && [ -n "$CLOUDINIT_SSH_KEYS" ]; then
+    CLOUDINIT_SSHKEYS_FILE="$WORKING_DIR/cloudinit_authorized_keys"
+    printf '%s\n' "$CLOUDINIT_SSH_KEYS" > "$CLOUDINIT_SSHKEYS_FILE"
+fi
 
 # Process all selected distros
 for distro_config in "${DISTRO_METADATA[@]}"; do
