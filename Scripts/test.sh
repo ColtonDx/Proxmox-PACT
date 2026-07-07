@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ################################################################################
-# Proxmox-P.A.C.T. Pre-Release Test Script
+# Proxmox-PACT Pre-Release Test Script
 #
 # Exercises the full build pipeline end-to-end against a real Proxmox host
 # before a release, using an isolated VMID range (88xxx) so it never collides
@@ -521,7 +521,7 @@ if [ -z "$SELECTED" ]; then
     exit 1
 fi
 
-log_section "Proxmox-P.A.C.T. Pre-Release Test"
+log_section "Proxmox-PACT Pre-Release Test"
 log_info "Proxmox host : $PROXMOX_HOST (remote: $PROXMOX_IS_REMOTE)"
 log_info "Storage pool : $PROXMOX_STORAGE"
 log_info "VMID base    : $TEST_VMID_BASE (templates $((TEST_VMID_BASE+1))..., clones $((TEST_VMID_BASE+CLONE_OFFSET))...)"

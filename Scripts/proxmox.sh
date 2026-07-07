@@ -219,6 +219,9 @@ apt-get install libguestfs-tools -y > /dev/null 2>&1
 # correctly no matter which user/home the script runs from.
 WORKING_DIR="$(pwd)/workingdir"
 mkdir -p "$WORKING_DIR"
+# The downloaded cloud images are imported into Proxmox storage during template creation,
+# so remove them (and the working dir) when we exit — on success or failure.
+trap 'rm -rf "$WORKING_DIR"' EXIT
 
 # Process all selected distros
 for distro_config in "${DISTRO_METADATA[@]}"; do

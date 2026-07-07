@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ################################################################################
-# Proxmox-P.A.C.T. Build Script
+# Proxmox-PACT Build Script
 #
 # This script orchestrates the complete build process for creating Proxmox VM
 # templates and customizing them with Packer. It supports three configuration modes:
@@ -89,7 +89,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || SCRIPT
 # defaults to main; the README bootstrap one-liner overrides it to the current branch
 # until this is merged. Both are overridable via the environment.
 PACT_REF="${PACT_REF:-main}"
-PACT_BASE_URL="${PACT_BASE_URL:-https://raw.githubusercontent.com/ColtonDx/Proxmox-P.A.C.T./$PACT_REF}"
+PACT_BASE_URL="${PACT_BASE_URL:-https://raw.githubusercontent.com/ColtonDx/Proxmox-PACT/$PACT_REF}"
 
 # Cleanup for URL-download temp files and the bootstrap working tree (single EXIT trap;
 # resolve_file_reference must NOT set its own trap, as an in-function trap inside a command
@@ -127,17 +127,30 @@ else
     cd "$PACT_BOOTSTRAP_DIR" || exit 1
 fi
 
+# Repository root (parent of the Scripts dir). Companion files are resolved by absolute path
+# from here so build.sh works no matter what directory it is invoked from.
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 #####################################################################################
 ################### CLI OPTION PARSING
 #####################################################################################
+
+# Detect whether we're running on a Proxmox host itself (its cluster filesystem or tools
+# are present). If so, default to local execution instead of SSH.
+ON_PROXMOX=false
+if [ -d /etc/pve ] || command -v pveversion &>/dev/null; then
+    ON_PROXMOX=true
+fi
 
 # Default flags and values (lowest precedence: the answerfile, then PACT_* env vars,
 # then CLI arguments each override these in turn)
 RUN_PACKER=false
 REBUILD_TEMPLATES=false
 INTERACTIVE_MODE=false
+DRY_RUN=false
 SSH_PRIVATE_KEY_PATH=""
-PROXMOX_IS_REMOTE=true
+# On a Proxmox host, default to local execution; otherwise default to remote (SSH).
+if [ "$ON_PROXMOX" = true ]; then PROXMOX_IS_REMOTE=false; else PROXMOX_IS_REMOTE=true; fi
 CUSTOM_PACKERFILE=""
 CUSTOM_ANSIBLE_PLAYBOOK=""
 CUSTOM_ANSIBLE_VARFILE=""
@@ -162,7 +175,7 @@ for arg in "$@"; do
     esac
 done
 
-CONFIG_FILE_EXPANDED="${ANSWERFILE_PATH:-.env.local}"
+CONFIG_FILE_EXPANDED="${ANSWERFILE_PATH:-$REPO_DIR/.env.local}"
 # Expand a leading tilde in the path
 CONFIG_FILE_EXPANDED="${CONFIG_FILE_EXPANDED/#\~/$HOME}"
 CONFIG_LOADED=false
@@ -261,6 +274,7 @@ Options:
   --proxmox-storage=POOL     Proxmox storage pool name (default: local-lvm).
   --proxmox-target-node=NODE Proxmox target node for Packer (default: pve).
   --local                    Run directly on Proxmox host (no SSH needed).
+  --dry-run                  Print the resolved plan (target, VMIDs, files) and exit.
   --build-distros=LIST       Comma-separated list of distros to build (e.g., debian12,ubuntu2404).
   --answerfile-path=PATH     Path to custom answerfile (.env.local used by default if exists).
   --custom-packerfile=PATH   Path or URL to custom Packer template file instead of default.
@@ -317,6 +331,9 @@ for arg in "$@"; do
             ;;
         --local)
             PROXMOX_IS_REMOTE=false
+            ;;
+        --dry-run)
+            DRY_RUN=true
             ;;
         --build-distros=*)
             BUILD_DISTROS="${arg#*=}"
@@ -443,7 +460,7 @@ if [ "$INTERACTIVE_MODE" = true ]; then
 
     # Q2: Ask about Packer customization
     echo ""
-    read -p "Do you want to customize the templates with Packer? (Y/N) [Default: No]: " -r choice_packer
+    read -p "Do you want to customize the templates with Packer/Ansible? (Y/N) [Default: No]: " -r choice_packer
     if [[ "$choice_packer" =~ ^[Yy]$ ]]; then
         RUN_PACKER=true
     fi
@@ -455,13 +472,23 @@ if [ "$INTERACTIVE_MODE" = true ]; then
         VMID_BASE="$vmid_input"
     fi
 
-    # Q4: Ask if Proxmox is remote
+    # Q4: Ask if Proxmox is remote (defaults to No when we're on a Proxmox host)
     echo ""
-    read -p "Is the Proxmox server remote? (Y/N) [Default: Yes]: " -r choice_remote
-    if [[ "$choice_remote" =~ ^[Nn]$ ]]; then
-        PROXMOX_IS_REMOTE=false
+    if [ "$ON_PROXMOX" = true ]; then
+        echo "This appears to be a Proxmox host, so local execution is the default."
+        read -p "Is the Proxmox server remote (build from here over SSH instead)? (Y/N) [Default: No]: " -r choice_remote
+        if [[ "$choice_remote" =~ ^[Yy]$ ]]; then
+            PROXMOX_IS_REMOTE=true
+        else
+            PROXMOX_IS_REMOTE=false
+        fi
     else
-        PROXMOX_IS_REMOTE=true
+        read -p "Is the Proxmox server remote? (Y/N) [Default: Yes]: " -r choice_remote
+        if [[ "$choice_remote" =~ ^[Nn]$ ]]; then
+            PROXMOX_IS_REMOTE=false
+        else
+            PROXMOX_IS_REMOTE=true
+        fi
     fi
 
     # Ask Proxmox settings only if remote
@@ -568,9 +595,39 @@ if [ "$INTERACTIVE_MODE" = true ]; then
         if [ -n "$proxmox_target_node_input" ]; then
             PROXMOX_TARGET_NODE="$proxmox_target_node_input"
         fi
+
+        # Ansible/Packer customization files. Each accepts a local path OR a URL
+        # (e.g. a GitLab/GitHub raw link); press Enter to use the built-in defaults.
+        # This is asked in both remote (SSH) and local modes.
+        echo ""
+        echo "Customization files (press Enter for the built-in defaults):"
+        read -p "  Custom Ansible playbook (local path or URL): " -r ansible_playbook_input
+        [ -n "$ansible_playbook_input" ] && CUSTOM_ANSIBLE_PLAYBOOK="$ansible_playbook_input"
+        read -p "  Custom Ansible variables file (local path or URL): " -r ansible_varfile_input
+        [ -n "$ansible_varfile_input" ] && CUSTOM_ANSIBLE_VARFILE="$ansible_varfile_input"
+        read -p "  Custom Packer template (local path or URL): " -r packerfile_input
+        [ -n "$packerfile_input" ] && CUSTOM_PACKERFILE="$packerfile_input"
     fi
 
     echo ""
+fi
+
+# Fill in still-missing required values for the non-interactive paths (CLI/answerfile/env).
+# On a terminal we prompt for the gaps, so you can supply as much or as little up front;
+# without a terminal the validation below fails with a clear message instead.
+if [ "$INTERACTIVE_MODE" = false ]; then
+    if [ -z "$BUILD_DISTROS" ] && [ -t 0 ]; then
+        read -p "Which distros to build? (all, debian, ubuntu, fedora, or e.g. debian12,ubuntu2404) [all]: " -r _bd
+        BUILD_DISTROS="${_bd:-all}"
+    fi
+    if [ "$DRY_RUN" = false ] && [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ] && [ -z "${PROXMOX_SSH_PASSWORD:-}" ] && [ -t 0 ]; then
+        read -sp "SSH password for $PROXMOX_SSH_USER@$PROXMOX_HOST: " -r PROXMOX_SSH_PASSWORD
+        echo ""
+    fi
+    if [ "$RUN_PACKER" = true ] && [ "$DRY_RUN" = false ] && [ -t 0 ]; then
+        [ -z "$PACKER_TOKEN_ID" ]     && read -p  "Proxmox API Token ID (for Packer): " -r PACKER_TOKEN_ID
+        [ -z "$PACKER_TOKEN_SECRET" ] && { read -sp "Proxmox API Token Secret (for Packer): " -r PACKER_TOKEN_SECRET; echo ""; }
+    fi
 fi
 
 # Parse BUILD_DISTROS into SELECTED_DISTROS (set via --build-distros=, answerfile, env,
@@ -582,11 +639,18 @@ if [ -n "$BUILD_DISTROS" ]; then
 fi
 
 # Validate required variables for Packer
-if [ "$RUN_PACKER" = true ]; then
+if [ "$RUN_PACKER" = true ] && [ "$DRY_RUN" = false ]; then
     if [ -z "$PACKER_TOKEN_ID" ] || [ -z "$PACKER_TOKEN_SECRET" ]; then
         echo "Error: PACKER_TOKEN_ID and PACKER_TOKEN_SECRET are required when using --run-packer" >&2
         exit 1
     fi
+fi
+
+# Validate that SSH authentication is available for remote mode.
+if [ "$DRY_RUN" = false ] && [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ] && [ -z "${PROXMOX_SSH_PASSWORD:-}" ]; then
+    echo "Error: SSH authentication required for $PROXMOX_SSH_USER@$PROXMOX_HOST." >&2
+    echo "Provide --proxmox-ssh-password or --ssh-private-key-path, or use --local." >&2
+    exit 1
 fi
 
 # Validate that at least one distro is selected
@@ -596,7 +660,17 @@ if [ -z "$SELECTED_DISTROS" ]; then
     exit 1
 fi
 
+# Validate the VMID base is numeric (proxmox.sh does arithmetic with it).
+if ! [[ "$VMID_BASE" =~ ^[0-9]+$ ]]; then
+    echo "Error: VMID base must be a positive number (got '$VMID_BASE')." >&2
+    echo "Set it via PACT_VMID_BASE, the answerfile (VMID_BASE=), or interactive mode." >&2
+    exit 1
+fi
+
 # Display configuration
+if [ "$ON_PROXMOX" = true ] && [ "$PROXMOX_IS_REMOTE" = false ]; then
+    echo "Note: detected a Proxmox host - executing locally (no SSH)."
+fi
 echo "Build Configuration:"
 echo "  Proxmox Host: $PROXMOX_HOST"
 echo "  Proxmox SSH User: $PROXMOX_SSH_USER"
@@ -606,7 +680,29 @@ echo "  Base VMID: $VMID_BASE"
 echo "  Selected Distros: $SELECTED_DISTROS"
 echo "  Run Packer: $RUN_PACKER"
 echo "  Rebuild Templates: $REBUILD_TEMPLATES"
+if [ "$RUN_PACKER" = true ]; then
+    [ -n "$CUSTOM_PACKERFILE" ]       && echo "  Custom Packer template: $CUSTOM_PACKERFILE"
+    [ -n "$CUSTOM_ANSIBLE_PLAYBOOK" ] && echo "  Custom Ansible playbook: $CUSTOM_ANSIBLE_PLAYBOOK"
+    [ -n "$CUSTOM_ANSIBLE_VARFILE" ]  && echo "  Custom Ansible varfile: $CUSTOM_ANSIBLE_VARFILE"
+fi
 echo ""
+
+# --dry-run: show the resolved plan and exit before doing anything.
+if [ "$DRY_RUN" = true ]; then
+    echo "Planned templates (VMID base $VMID_BASE):"
+    for distro_id in "${DISTRO_IDS[@]}"; do
+        [[ " $SELECTED_DISTROS " == *" $distro_id "* ]] || continue
+        offset="${DISTRO_OFFSET[$distro_id]}"
+        if [ "$RUN_PACKER" = true ]; then
+            echo "  ${DISTRO_NAME[$distro_id]}: base $((VMID_BASE + offset)) -> Packer $((VMID_BASE + 100 + offset))"
+        else
+            echo "  ${DISTRO_NAME[$distro_id]}: $((VMID_BASE + offset))"
+        fi
+    done
+    echo ""
+    echo "Dry run - no changes made."
+    exit 0
+fi
 
 #####################################################################################
 ###################FUNCTIONS
@@ -621,9 +717,9 @@ echo ""
 # reading commands from stdin (used for the build heredoc below).
 pve_ssh() {
     if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
-        ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" "$@"
+        ssh -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=15 "$PROXMOX_SSH_USER@$PROXMOX_HOST" "$@"
     else
-        sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$PROXMOX_SSH_USER@$PROXMOX_HOST" "$@"
+        sshpass -p "$PROXMOX_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 "$PROXMOX_SSH_USER@$PROXMOX_HOST" "$@"
     fi
 }
 
@@ -631,9 +727,9 @@ pve_ssh() {
 pve_scp() {
     local src="$1" dest="$2"
     if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
-        scp -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no "$src" "$PROXMOX_SSH_USER@$PROXMOX_HOST:$dest"
+        scp -i "$SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=15 "$src" "$PROXMOX_SSH_USER@$PROXMOX_HOST:$dest"
     else
-        sshpass -p "$PROXMOX_SSH_PASSWORD" scp -o StrictHostKeyChecking=no "$src" "$PROXMOX_SSH_USER@$PROXMOX_HOST:$dest"
+        sshpass -p "$PROXMOX_SSH_PASSWORD" scp -o StrictHostKeyChecking=no -o ConnectTimeout=15 "$src" "$PROXMOX_SSH_USER@$PROXMOX_HOST:$dest"
     fi
 }
 
@@ -684,9 +780,9 @@ start_packer() {
     # Resolve the Packer template and Ansible files ONCE (downloading any URLs a single
     # time) and initialize Packer once, then reuse them for every selected distro instead
     # of re-downloading / re-initializing per VM.
-    local packerfile="${CUSTOM_PACKERFILE:-./Packer/Templates/universal.pkr.hcl}"
-    local ansiblefile="${CUSTOM_ANSIBLE_PLAYBOOK:-./Ansible/Playbooks/image_customizations.yml}"
-    local ansiblevarfile="${CUSTOM_ANSIBLE_VARFILE:-./Ansible/Variables/vars.yml}"
+    local packerfile="${CUSTOM_PACKERFILE:-$REPO_DIR/Packer/Templates/universal.pkr.hcl}"
+    local ansiblefile="${CUSTOM_ANSIBLE_PLAYBOOK:-$REPO_DIR/Ansible/Playbooks/image_customizations.yml}"
+    local ansiblevarfile="${CUSTOM_ANSIBLE_VARFILE:-$REPO_DIR/Ansible/Variables/vars.yml}"
 
     resolve_file_reference "$packerfile" "Packer template" || return 1
     packerfile="$RESOLVED_FILE"
@@ -753,68 +849,70 @@ fi
 ###################REQUIREMENTS
 #####################################################################################
 
-# Determine which host packages we actually need, based on what this run will do:
-#   - sshpass: only for remote password authentication (not key auth, not local mode)
-#   - unzip/git/curl/ansible: whenever Packer runs, local or remote
-PACKAGES=""
-if [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ]; then
-    PACKAGES="sshpass"
-fi
-if [ "$RUN_PACKER" = true ]; then
-    PACKAGES="$PACKAGES unzip git curl ansible"
-fi
-
-if [ -n "$PACKAGES" ]; then
-
-    # A tool is "missing" if its command isn't on PATH. Every package we need here has
-    # a same-named command, so this avoids substring false positives (e.g. dpkg -l | grep
-    # curl matching libcurl4) and needs no per-distro detection logic.
-    PACKAGES_TO_INSTALL=()
-    for pkg in $PACKAGES; do
-        if ! command -v "$pkg" &> /dev/null; then
-            PACKAGES_TO_INSTALL+=("$pkg")
-        fi
+# Install the given packages that aren't already on PATH (command name == package name
+# for everything we need here, which avoids dpkg/rpm substring false positives).
+install_pkgs() {
+    local want=("$@") missing=() pkg
+    for pkg in "${want[@]}"; do
+        command -v "$pkg" &>/dev/null || missing+=("$pkg")
     done
+    [ "${#missing[@]}" -eq 0 ] && return 0
+    echo "Installing on $(hostname): ${missing[*]}"
+    case "$OS" in
+        ubuntu|debian) sudo apt-get update >/dev/null 2>&1; sudo apt-get install -y "${missing[@]}" ;;
+        centos|rocky|almalinux|fedora|rhel) sudo dnf install -y "${missing[@]}" ;;
+        opensuse|sles) sudo zypper install -y "${missing[@]}" ;;
+        *) echo "Error: unsupported distribution '$OS'; install manually: ${missing[*]}" >&2; return 1 ;;
+    esac || { echo "Error: failed to install: ${missing[*]}" >&2; return 1; }
+}
 
-    # Only install if there are packages to install
-    if [ "${#PACKAGES_TO_INSTALL[@]}" -gt 0 ]; then
-        echo "Installing required packages: ${PACKAGES_TO_INSTALL[*]}"
-        case "$OS" in
-            ubuntu|debian)
-                sudo apt-get update > /dev/null 2>&1
-                if ! sudo apt-get install -y "${PACKAGES_TO_INSTALL[@]}"; then
-                    echo "Error: Failed to install packages. Please install manually: ${PACKAGES_TO_INSTALL[*]}" >&2
-                    exit 1
-                fi
-                ;;
-            centos|rocky|almalinux|fedora|rhel)
-                if ! sudo dnf install -y "${PACKAGES_TO_INSTALL[@]}"; then
-                    echo "Error: Failed to install packages. Please install manually: ${PACKAGES_TO_INSTALL[*]}" >&2
-                    exit 1
-                fi
-                ;;
-            opensuse|sles)
-                if ! sudo zypper install -y "${PACKAGES_TO_INSTALL[@]}"; then
-                    echo "Error: Failed to install packages. Please install manually: ${PACKAGES_TO_INSTALL[*]}" >&2
-                    exit 1
-                fi
-                ;;
-            *)
-                echo "Unsupported distribution: $OS"
-                exit 1
-                ;;
-        esac
-    else
-        echo "All required packages are already installed."
+# Warn (and, on a TTY, confirm) before installing tooling on what looks like a Proxmox host.
+warn_local_install() {
+    [ "$ON_PROXMOX" != true ] && return 0
+    echo "Warning: this appears to be your Proxmox host. Installing $* here is NOT recommended;" >&2
+    echo "         prefer running build.sh from a separate management machine." >&2
+    if [ -t 0 ]; then
+        read -p "Continue installing on the Proxmox host anyway? (y/N): " -r _ok
+        [[ "$_ok" =~ ^[Yy]$ ]] || { echo "Aborted." >&2; exit 1; }
     fi
+}
+
+# For remote password auth we need sshpass just to reach the host. Install that first (it's
+# tiny) so the connectivity preflight below runs before the heavier toolchain / downloads.
+if [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ] && ! command -v sshpass &>/dev/null; then
+    warn_local_install "sshpass"
+    install_pkgs sshpass || exit 1
+    command -v sshpass &>/dev/null || { echo "Error: sshpass is required for password auth but is not installed." >&2; exit 1; }
 fi
 
-# Verify sshpass is available for remote password authentication (not needed with a key).
-if [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ]; then
-    if ! command -v sshpass &> /dev/null; then
-        echo "Error: sshpass is required for SSH password authentication but is not installed" >&2
+# Preflight: confirm we can reach Proxmox and that 'qm' exists BEFORE installing the build
+# toolchain or downloading any images, so a bad host/credentials/target fails in seconds.
+if [ "$PROXMOX_IS_REMOTE" = true ]; then
+    echo "Checking connectivity to $PROXMOX_SSH_USER@$PROXMOX_HOST ..."
+    if ! pve_ssh 'command -v qm >/dev/null 2>&1'; then
+        echo "Error: cannot reach $PROXMOX_SSH_USER@$PROXMOX_HOST over SSH, or 'qm' is not available there." >&2
+        echo "Check the hostname/credentials and that the target is a Proxmox host." >&2
         exit 1
     fi
+    echo "Connected to Proxmox ('qm' found)."
+    if pve_ssh "command -v pvesm >/dev/null 2>&1 && ! pvesm status --storage $PROXMOX_STORAGE >/dev/null 2>&1"; then
+        echo "Warning: storage pool '$PROXMOX_STORAGE' was not found on the Proxmox host; the build may fail." >&2
+    fi
+else
+    if ! command -v qm &>/dev/null; then
+        echo "Error: running locally but 'qm' was not found - is this a Proxmox host?" >&2
+        echo "Use the SSH options (e.g. --proxmox-host=...) to target a remote Proxmox instead." >&2
+        exit 1
+    fi
+    if command -v pvesm >/dev/null 2>&1 && ! pvesm status --storage "$PROXMOX_STORAGE" >/dev/null 2>&1; then
+        echo "Warning: storage pool '$PROXMOX_STORAGE' was not found; the build may fail." >&2
+    fi
+fi
+
+# Install the (heavier) Packer/Ansible toolchain now that connectivity is confirmed.
+if [ "$RUN_PACKER" = true ]; then
+    warn_local_install "Packer and Ansible"
+    install_pkgs unzip git curl ansible || exit 1
 fi
 
 # Install Packer only if --run-packer option is enabled (regardless of local or remote)
@@ -825,13 +923,17 @@ if [ "$RUN_PACKER" = true ]; then
     if ! command -v packer &> /dev/null; then
         echo "Packer is not installed. Installing Packer ${PACKER_VERSION}..."
         packer_zip="packer_${PACKER_VERSION}_linux_amd64.zip"
-        if ! curl -fSL -O "https://releases.hashicorp.com/packer/${PACKER_VERSION}/${packer_zip}"; then
+        # Download and unpack in a temp dir so the archive's other files (LICENSE.txt, etc.)
+        # never land in the working directory/repo; only the packer binary is installed.
+        _pkdir="$(mktemp -d)"
+        if ! curl -fSL -o "$_pkdir/$packer_zip" "https://releases.hashicorp.com/packer/${PACKER_VERSION}/${packer_zip}"; then
             echo "Error: Failed to download Packer ${PACKER_VERSION}" >&2
+            rm -rf "$_pkdir"
             exit 1
         fi
-        unzip -o -q "$packer_zip"
-        sudo mv packer /usr/local/bin/
-        rm -f "$packer_zip"
+        unzip -o -q "$_pkdir/$packer_zip" -d "$_pkdir"
+        sudo mv "$_pkdir/packer" /usr/local/bin/
+        rm -rf "$_pkdir"
         echo "Packer ${PACKER_VERSION} installed successfully."
     else
         echo "Packer is already installed."

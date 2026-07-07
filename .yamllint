@@ -1,4 +1,4 @@
-# yamllint configuration for Proxmox-P.A.C.T.
+# yamllint configuration for Proxmox-PACT
 #
 # Relaxes purely-stylistic rules that conflict with the existing Ansible file
 # style (deeper module-argument indentation, longer comment lines, "yes"/"no"
