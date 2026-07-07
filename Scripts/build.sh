@@ -620,11 +620,11 @@ if [ "$INTERACTIVE_MODE" = false ]; then
         read -p "Which distros to build? (all, debian, ubuntu, fedora, or e.g. debian12,ubuntu2404) [all]: " -r _bd
         BUILD_DISTROS="${_bd:-all}"
     fi
-    if [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ] && [ -z "${PROXMOX_SSH_PASSWORD:-}" ] && [ -t 0 ]; then
+    if [ "$DRY_RUN" = false ] && [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ] && [ -z "${PROXMOX_SSH_PASSWORD:-}" ] && [ -t 0 ]; then
         read -sp "SSH password for $PROXMOX_SSH_USER@$PROXMOX_HOST: " -r PROXMOX_SSH_PASSWORD
         echo ""
     fi
-    if [ "$RUN_PACKER" = true ] && [ -t 0 ]; then
+    if [ "$RUN_PACKER" = true ] && [ "$DRY_RUN" = false ] && [ -t 0 ]; then
         [ -z "$PACKER_TOKEN_ID" ]     && read -p  "Proxmox API Token ID (for Packer): " -r PACKER_TOKEN_ID
         [ -z "$PACKER_TOKEN_SECRET" ] && { read -sp "Proxmox API Token Secret (for Packer): " -r PACKER_TOKEN_SECRET; echo ""; }
     fi
@@ -639,7 +639,7 @@ if [ -n "$BUILD_DISTROS" ]; then
 fi
 
 # Validate required variables for Packer
-if [ "$RUN_PACKER" = true ]; then
+if [ "$RUN_PACKER" = true ] && [ "$DRY_RUN" = false ]; then
     if [ -z "$PACKER_TOKEN_ID" ] || [ -z "$PACKER_TOKEN_SECRET" ]; then
         echo "Error: PACKER_TOKEN_ID and PACKER_TOKEN_SECRET are required when using --run-packer" >&2
         exit 1
@@ -647,7 +647,7 @@ if [ "$RUN_PACKER" = true ]; then
 fi
 
 # Validate that SSH authentication is available for remote mode.
-if [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ] && [ -z "${PROXMOX_SSH_PASSWORD:-}" ]; then
+if [ "$DRY_RUN" = false ] && [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ] && [ -z "${PROXMOX_SSH_PASSWORD:-}" ]; then
     echo "Error: SSH authentication required for $PROXMOX_SSH_USER@$PROXMOX_HOST." >&2
     echo "Provide --proxmox-ssh-password or --ssh-private-key-path, or use --local." >&2
     exit 1
