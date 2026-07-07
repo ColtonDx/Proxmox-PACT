@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ################################################################################
-# Proxmox-P.A.C.T. Build Script
+# Proxmox-PACT Build Script
 #
 # This script orchestrates the complete build process for creating Proxmox VM
 # templates and customizing them with Packer. It supports three configuration modes:
@@ -89,7 +89,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || SCRIPT
 # defaults to main; the README bootstrap one-liner overrides it to the current branch
 # until this is merged. Both are overridable via the environment.
 PACT_REF="${PACT_REF:-main}"
-PACT_BASE_URL="${PACT_BASE_URL:-https://raw.githubusercontent.com/ColtonDx/Proxmox-P.A.C.T./$PACT_REF}"
+PACT_BASE_URL="${PACT_BASE_URL:-https://raw.githubusercontent.com/ColtonDx/Proxmox-PACT/$PACT_REF}"
 
 # Cleanup for URL-download temp files and the bootstrap working tree (single EXIT trap;
 # resolve_file_reference must NOT set its own trap, as an in-function trap inside a command

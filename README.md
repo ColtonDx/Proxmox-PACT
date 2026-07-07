@@ -1,7 +1,7 @@
-# Proxmox Packer Ansible CloudInit Templates - Proxmox P.A.C.T.
+# Proxmox Packer Ansible CloudInit Templates - Proxmox-PACT
 <img src="Images/Logo.jpg" alt="Application Logo" width="200"/>
 
-P.A.C.T. stands for Packer Ansible CloudInit Templates. P.A.C.T. creates a series of Linux VM Templates on your Proxmox instance from a variety of distros and versions. These templates will be preconfigured for CloudInit making it so that things like resizing the filesystem or forgetting your password can easily be handled from the Proxmox web interface. We will also preinstall the QEMU-GUEST-AGENT service so that the VMs interact with Proxmox without having the "Could not get a Lock" issue. These templates can also leverage both Packer and Ansible to generalize and update the images. You can also pipe in your own Ansible/Packer playbooks to customize your images
+PACT stands for Packer Ansible CloudInit Templates. PACT creates a series of Linux VM Templates on your Proxmox instance from a variety of distros and versions. These templates will be preconfigured for CloudInit making it so that things like resizing the filesystem or forgetting your password can easily be handled from the Proxmox web interface. We will also preinstall the QEMU-GUEST-AGENT service so that the VMs interact with Proxmox without having the "Could not get a Lock" issue. These templates can also leverage both Packer and Ansible to generalize and update the images. You can also pipe in your own Ansible/Packer playbooks to customize your images
 
 Disclaimer! AI Tools were used to generate some of the functionality in these tools, though the core scripts are refinements on earlier scripts I personally wrote.
 
@@ -73,7 +73,7 @@ After base templates are created (regardless of whether SSH or Ansible mode was 
 **Zero-clone bootstrap** (nothing to download first — `build.sh` fetches everything it needs and prompts you):
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ColtonDx/Proxmox-P.A.C.T./main/Scripts/build.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/ColtonDx/Proxmox-PACT/main/Scripts/build.sh)
 ```
 
 Run with no arguments, it asks whether to continue in interactive mode; answer `n` to point it at an answerfile (local path or URL) plus optional custom playbook/varfile URLs. On the Proxmox side it has the host pull `proxmox.sh` directly instead of copying it over SSH. Use `bash <(curl …)` (process substitution) rather than `curl … | bash` so the interactive prompts keep working.
@@ -81,13 +81,13 @@ Run with no arguments, it asks whether to continue in interactive mode; answer `
 **One-liner** (clone and launch interactive mode in a single command):
 
 ```bash
-git clone https://github.com/ColtonDx/Proxmox-P.A.C.T..git && cd Proxmox-P.A.C.T. && bash Scripts/build.sh --interactive
+git clone https://github.com/ColtonDx/Proxmox-PACT.git && cd Proxmox-PACT && bash Scripts/build.sh --interactive
 ```
 
 Non-interactive variant (pass your own settings):
 
 ```bash
-git clone https://github.com/ColtonDx/Proxmox-P.A.C.T..git && cd Proxmox-P.A.C.T. && \
+git clone https://github.com/ColtonDx/Proxmox-PACT.git && cd Proxmox-PACT && \
   bash Scripts/build.sh --proxmox-host=pve.local --proxmox-ssh-user=root \
     --proxmox-ssh-password="your_password" --proxmox-storage=local-lvm
 ```
@@ -97,8 +97,8 @@ Or step by step:
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/ColtonDx/Proxmox-P.A.C.T..git
-   cd Proxmox-P.A.C.T.
+   git clone https://github.com/ColtonDx/Proxmox-PACT.git
+   cd Proxmox-PACT
    chmod +x ./Scripts/build.sh
    ```
 
