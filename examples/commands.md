@@ -68,6 +68,29 @@ ubuntu2604 fedora43 fedora44`.
   --custom-packerfile=https://example.com/custom.pkr.hcl
 ```
 
+## Cloud-Init customization
+
+```bash
+# Bake a default username + SSH key into every template (recommended over a password)
+./Scripts/build.sh --proxmox-host=pve.local --proxmox-ssh-user=root \
+  --proxmox-ssh-password="password" --customize-cloudinit \
+  --cloudinit-user=ubuntu --cloudinit-ssh-key-file=~/.ssh/id_ed25519.pub
+
+# Same, with the key pasted directly instead of a file
+./Scripts/build.sh --proxmox-host=pve.local --proxmox-ssh-user=root \
+  --proxmox-ssh-password="password" --customize-cloudinit \
+  --cloudinit-user=ubuntu --cloudinit-ssh-keys="ssh-ed25519 AAAA... you@example.com"
+
+# Set a default password too (stored in PLAINTEXT in the VM's Proxmox config - SSH keys are safer)
+./Scripts/build.sh --proxmox-host=pve.local --proxmox-ssh-user=root \
+  --proxmox-ssh-password="password" --customize-cloudinit \
+  --cloudinit-user=ubuntu --cloudinit-password="changeme"
+```
+
+No values on the command line? Run with `--customize-cloudinit` alone (or answer the
+prompt in `--interactive` mode) and build.sh asks for username/password/SSH key
+interactively.
+
 ## Rebuild / preview
 
 ```bash

@@ -49,6 +49,11 @@
 #   --custom-ansible-varfile=PATH  Path to custom variables file for Ansible in Packer
 #   --packer-token-id=TOKEN        Proxmox API Token ID for Packer
 #   --packer-token-secret=SEC      Proxmox API Token Secret for Packer
+#   --customize-cloudinit          Bake Cloud-Init defaults (username/password/SSH key) into templates
+#   --cloudinit-user=USER          Cloud-Init default username (requires --customize-cloudinit)
+#   --cloudinit-password=PASS      Cloud-Init default password (plaintext in the VM config; SSH keys are safer)
+#   --cloudinit-ssh-keys=KEY       Literal SSH public key to inject (mutually exclusive with the file variant below)
+#   --cloudinit-ssh-key-file=PATH  Local path to a file of SSH public keys, one per line
 #   --help                         Show help message
 #
 # Answerfile (.env.local) variables:
@@ -68,6 +73,11 @@
 #   CUSTOM_PACKERFILE              Custom Packer template path (optional)
 #   CUSTOM_ANSIBLE_PLAYBOOK        Custom Ansible playbook for Packer (optional)
 #   CUSTOM_ANSIBLE_VARFILE         Custom Ansible variables file for Packer (optional)
+#   CUSTOMIZE_CLOUDINIT            Bake Cloud-Init defaults into templates (true/false, default: false)
+#   CLOUDINIT_USER                 Cloud-Init default username (optional, requires CUSTOMIZE_CLOUDINIT=true)
+#   CLOUDINIT_PASSWORD             Cloud-Init default password (optional; stored in plaintext by Proxmox)
+#   CLOUDINIT_SSH_KEYS             Literal SSH public key(s) to inject (optional, one per line)
+#   CLOUDINIT_SSH_KEY_FILE         Path to a file of SSH public keys (optional, overrides CLOUDINIT_SSH_KEYS)
 #
 ################################################################################
 
@@ -158,6 +168,11 @@ BUILD_DISTROS=""
 PACKER_TOKEN_ID=""
 PACKER_TOKEN_SECRET=""
 ANSWERFILE_PATH=""
+CUSTOMIZE_CLOUDINIT=false
+CLOUDINIT_USER=""
+CLOUDINIT_PASSWORD=""
+CLOUDINIT_SSH_KEYS=""
+CLOUDINIT_SSH_KEY_FILE=""
 
 #####################################################################################
 # LOAD ANSWERFILE (.env.local by default, or --answerfile-path / PACT_ANSWERFILE_PATH)
@@ -209,6 +224,11 @@ fi
 [ -n "${PACT_PROXMOX_STORAGE:-}" ] && PROXMOX_STORAGE="${PACT_PROXMOX_STORAGE}"
 [ -n "${PACT_PROXMOX_TARGET_NODE:-}" ] && PROXMOX_TARGET_NODE="${PACT_PROXMOX_TARGET_NODE}"
 [ -n "${PACT_VMID_BASE:-}" ] && VMID_BASE="${PACT_VMID_BASE}"
+[ -n "${PACT_CUSTOMIZE_CLOUDINIT:-}" ] && CUSTOMIZE_CLOUDINIT="${PACT_CUSTOMIZE_CLOUDINIT}"
+[ -n "${PACT_CLOUDINIT_USER:-}" ] && CLOUDINIT_USER="${PACT_CLOUDINIT_USER}"
+[ -n "${PACT_CLOUDINIT_PASSWORD:-}" ] && CLOUDINIT_PASSWORD="${PACT_CLOUDINIT_PASSWORD}"
+[ -n "${PACT_CLOUDINIT_SSH_KEYS:-}" ] && CLOUDINIT_SSH_KEYS="${PACT_CLOUDINIT_SSH_KEYS}"
+[ -n "${PACT_CLOUDINIT_SSH_KEY_FILE:-}" ] && CLOUDINIT_SSH_KEY_FILE="${PACT_CLOUDINIT_SSH_KEY_FILE}"
 
 # Distro metadata (ids, display names, VMID offsets) is defined once in
 # Scripts/proxmox.sh. Parse it here so there is a single source of truth: adding or
@@ -259,6 +279,27 @@ expand_selected() {
 # Selected distros to build (space-separated list of distro IDs)
 SELECTED_DISTROS=""
 
+# Interactively prompt for optional Cloud-Init defaults, setting CLOUDINIT_USER,
+# CLOUDINIT_PASSWORD, and CLOUDINIT_SSH_KEYS. Shared by full --interactive mode and the
+# non-interactive gap-fill prompt (used when --customize-cloudinit is set with no values).
+prompt_cloudinit_values() {
+    read -p "  Cloud-Init username (blank to leave the image's default user): " -r CLOUDINIT_USER
+    echo "  Warning: a Cloud-Init password is stored in PLAINTEXT in the Proxmox VM config (qm config); SSH keys are safer."
+    read -sp "  Cloud-Init password (blank to skip): " -r CLOUDINIT_PASSWORD
+    echo ""
+    read -p "  SSH public key file path (blank to paste a single key instead; use a file for multiple keys): " -r _ci_keyfile
+    if [ -n "$_ci_keyfile" ]; then
+        _ci_keyfile="${_ci_keyfile/#\~/$HOME}"
+        if [ -f "$_ci_keyfile" ]; then
+            CLOUDINIT_SSH_KEYS="$(cat "$_ci_keyfile")"
+        else
+            echo "  Warning: file not found: $_ci_keyfile - skipping SSH key." >&2
+        fi
+    else
+        read -p "  Paste a single SSH public key (blank to skip): " -r CLOUDINIT_SSH_KEYS
+    fi
+}
+
 print_usage() {
     cat <<EOF
 Usage: $0 [OPTIONS]
@@ -282,6 +323,11 @@ Options:
   --custom-ansible-varfile=PATH  Path or URL to custom variables file for Ansible playbook (default: ./Ansible/Variables/vars.yml).
   --packer-token-id=TOKEN    Proxmox API Token ID for Packer (required with --run-packer).
   --packer-token-secret=SEC  Proxmox API Token Secret for Packer (required with --run-packer).
+  --customize-cloudinit      Bake Cloud-Init defaults (username/password/SSH key) into the templates.
+  --cloudinit-user=USER      Cloud-Init default username (with --customize-cloudinit).
+  --cloudinit-password=PASS  Cloud-Init default password (plaintext in the VM config; SSH keys are safer).
+  --cloudinit-ssh-keys=KEY   Literal SSH public key to inject (mutually exclusive with --cloudinit-ssh-key-file).
+  --cloudinit-ssh-key-file=PATH  Local path to a file of SSH public keys, one per line.
   --help                     Show this help and exit
 
 Notes:
@@ -290,6 +336,8 @@ Notes:
   - Without --rebuild-templates, existing VMs at target VMIDs are preserved (safer).
   - --build-distros accepts: all, debian, ubuntu, fedora, individual names (debian11, debian12, ubuntu2204, fedora43, etc.)
   - --custom-packerfile allows using a custom Packer template with --run-packer.
+  - --customize-cloudinit requires at least one of --cloudinit-user, --cloudinit-password,
+    --cloudinit-ssh-keys, or --cloudinit-ssh-key-file.
 EOF
 }
 
@@ -356,6 +404,24 @@ for arg in "$@"; do
         --packer-token-secret=*)
             PACKER_TOKEN_SECRET="${arg#*=}"
             ;;
+        --customize-cloudinit|--customize-cloudinit=true)
+            CUSTOMIZE_CLOUDINIT=true
+            ;;
+        --customize-cloudinit=false)
+            CUSTOMIZE_CLOUDINIT=false
+            ;;
+        --cloudinit-user=*)
+            CLOUDINIT_USER="${arg#*=}"
+            ;;
+        --cloudinit-password=*)
+            CLOUDINIT_PASSWORD="${arg#*=}"
+            ;;
+        --cloudinit-ssh-keys=*)
+            CLOUDINIT_SSH_KEYS="${arg#*=}"
+            ;;
+        --cloudinit-ssh-key-file=*)
+            CLOUDINIT_SSH_KEY_FILE="${arg#*=}"
+            ;;
         --help)
             print_usage
             exit 0
@@ -390,6 +456,21 @@ if [ "$INTERACTIVE_MODE" = true ]; then
         echo "Or use: ./build.sh [OPTIONS] (without --interactive)" >&2
         exit 1
     fi
+fi
+
+# Resolve a local Cloud-Init SSH key file (if given) into CLOUDINIT_SSH_KEYS. Done once,
+# after every source (answerfile/env/CLI) has had a chance to set either variable.
+if [ -n "$CLOUDINIT_SSH_KEY_FILE" ]; then
+    if [ -n "$CLOUDINIT_SSH_KEYS" ]; then
+        echo "Error: set only one of --cloudinit-ssh-keys or --cloudinit-ssh-key-file (CLOUDINIT_SSH_KEYS / CLOUDINIT_SSH_KEY_FILE)." >&2
+        exit 1
+    fi
+    CLOUDINIT_SSH_KEY_FILE="${CLOUDINIT_SSH_KEY_FILE/#\~/$HOME}"
+    if [ ! -f "$CLOUDINIT_SSH_KEY_FILE" ]; then
+        echo "Error: Cloud-Init SSH key file not found: $CLOUDINIT_SSH_KEY_FILE" >&2
+        exit 1
+    fi
+    CLOUDINIT_SSH_KEYS="$(cat "$CLOUDINIT_SSH_KEY_FILE")"
 fi
 
 # Set defaults for unset variables (CLI arguments take precedence)
@@ -458,21 +539,29 @@ if [ "$INTERACTIVE_MODE" = true ]; then
         fi
     done
 
-    # Q2: Ask about Packer customization
+    # Q2: Ask about Cloud-Init customization (username/password/SSH key baked into templates)
+    echo ""
+    read -p "Customize Cloud-Init defaults (username/password/SSH key) baked into the templates? (Y/N) [Default: No]: " -r choice_cloudinit
+    if [[ "$choice_cloudinit" =~ ^[Yy]$ ]]; then
+        CUSTOMIZE_CLOUDINIT=true
+        prompt_cloudinit_values
+    fi
+
+    # Q3: Ask about Packer customization
     echo ""
     read -p "Do you want to customize the templates with Packer/Ansible? (Y/N) [Default: No]: " -r choice_packer
     if [[ "$choice_packer" =~ ^[Yy]$ ]]; then
         RUN_PACKER=true
     fi
 
-    # Q3: Ask for Base VMID
+    # Q4: Ask for Base VMID
     echo ""
     read -p "Base VMID (press Enter for default 800): " -r vmid_input
     if [ -n "$vmid_input" ]; then
         VMID_BASE="$vmid_input"
     fi
 
-    # Q4: Ask if Proxmox is remote (defaults to No when we're on a Proxmox host)
+    # Q5: Ask if Proxmox is remote (defaults to No when we're on a Proxmox host)
     echo ""
     if [ "$ON_PROXMOX" = true ]; then
         echo "This appears to be a Proxmox host, so local execution is the default."
@@ -628,6 +717,11 @@ if [ "$INTERACTIVE_MODE" = false ]; then
         [ -z "$PACKER_TOKEN_ID" ]     && read -p  "Proxmox API Token ID (for Packer): " -r PACKER_TOKEN_ID
         [ -z "$PACKER_TOKEN_SECRET" ] && { read -sp "Proxmox API Token Secret (for Packer): " -r PACKER_TOKEN_SECRET; echo ""; }
     fi
+    if [ "$CUSTOMIZE_CLOUDINIT" = true ] && [ -z "$CLOUDINIT_USER" ] && [ -z "$CLOUDINIT_PASSWORD" ] && [ -z "$CLOUDINIT_SSH_KEYS" ] && [ "$DRY_RUN" = false ] && [ -t 0 ]; then
+        echo ""
+        echo "Cloud-Init customization is enabled (--customize-cloudinit) but no values were provided."
+        prompt_cloudinit_values
+    fi
 fi
 
 # Parse BUILD_DISTROS into SELECTED_DISTROS (set via --build-distros=, answerfile, env,
@@ -644,6 +738,13 @@ if [ "$RUN_PACKER" = true ] && [ "$DRY_RUN" = false ]; then
         echo "Error: PACKER_TOKEN_ID and PACKER_TOKEN_SECRET are required when using --run-packer" >&2
         exit 1
     fi
+fi
+
+# Validate that Cloud-Init customization has at least one value to apply.
+if [ "$CUSTOMIZE_CLOUDINIT" = true ] && [ -z "$CLOUDINIT_USER" ] && [ -z "$CLOUDINIT_PASSWORD" ] && [ -z "$CLOUDINIT_SSH_KEYS" ]; then
+    echo "Error: --customize-cloudinit is set but no username, password, or SSH key was provided." >&2
+    echo "Set --cloudinit-user, --cloudinit-password, --cloudinit-ssh-keys, or --cloudinit-ssh-key-file (or use --interactive)." >&2
+    exit 1
 fi
 
 # Validate that SSH authentication is available for remote mode.
@@ -685,6 +786,13 @@ if [ "$RUN_PACKER" = true ]; then
     [ -n "$CUSTOM_ANSIBLE_PLAYBOOK" ] && echo "  Custom Ansible playbook: $CUSTOM_ANSIBLE_PLAYBOOK"
     [ -n "$CUSTOM_ANSIBLE_VARFILE" ]  && echo "  Custom Ansible varfile: $CUSTOM_ANSIBLE_VARFILE"
 fi
+echo "  Customize Cloud-Init: $CUSTOMIZE_CLOUDINIT"
+if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
+    # Never print the password or key material itself - only whether they're set.
+    [ -n "$CLOUDINIT_USER" ]     && echo "    Cloud-Init user: $CLOUDINIT_USER"
+    [ -n "$CLOUDINIT_PASSWORD" ] && echo "    Cloud-Init password: (set)"
+    [ -n "$CLOUDINIT_SSH_KEYS" ] && echo "    Cloud-Init SSH key(s): (set)"
+fi
 echo ""
 
 # --dry-run: show the resolved plan and exit before doing anything.
@@ -699,6 +807,10 @@ if [ "$DRY_RUN" = true ]; then
             echo "  ${DISTRO_NAME[$distro_id]}: $((VMID_BASE + offset))"
         fi
     done
+    if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
+        echo ""
+        echo "Cloud-Init customization: enabled (baked into each base template)"
+    fi
     echo ""
     echo "Dry run - no changes made."
     exit 0
@@ -944,6 +1056,17 @@ fi
 ################### MAIN
 #####################################################################################
 
+# Base64-encode the Cloud-Init password/SSH keys once (empty strings encode to empty, so
+# this is safe to compute unconditionally). Handed to proxmox.sh via env vars rather than
+# CLI args so arbitrary content (spaces, newlines, quotes) survives the SSH command line
+# intact and isn't exposed as plaintext in `ps` output on the Proxmox host.
+CI_USER_B64="" CI_PASSWORD_B64="" CI_SSHKEYS_B64=""
+if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
+    CI_USER_B64="$(printf '%s' "$CLOUDINIT_USER" | base64 | tr -d '\n')"
+    CI_PASSWORD_B64="$(printf '%s' "$CLOUDINIT_PASSWORD" | base64 | tr -d '\n')"
+    CI_SSHKEYS_B64="$(printf '%s' "$CLOUDINIT_SSH_KEYS" | base64 | tr -d '\n')"
+fi
+
 # Run proxmox.sh to create templates (SSH to remote or run locally)
 if [ "$PROXMOX_IS_REMOTE" = true ]; then
     # Build proxmox.sh arguments based on configuration
@@ -957,6 +1080,11 @@ if [ "$PROXMOX_IS_REMOTE" = true ]; then
     # Add run-packer flag if Packer will be run
     if [ "$RUN_PACKER" = true ]; then
         PROXMOX_SCRIPT_ARGS+=("--run-packer")
+    fi
+
+    # Add customize-cloudinit flag if enabled (values travel via PACT_CI_*_B64 env vars below)
+    if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
+        PROXMOX_SCRIPT_ARGS+=("--customize-cloudinit")
     fi
 
     # Add build list to arguments
@@ -989,7 +1117,7 @@ if [ "$PROXMOX_IS_REMOTE" = true ]; then
     pve_ssh << EOF
         $remote_fetch
         chmod +x ./$WORK_DIR_NAME/proxmox.sh
-        ./$WORK_DIR_NAME/proxmox.sh ${PROXMOX_SCRIPT_ARGS[*]}
+        PACT_CI_USER_B64='$CI_USER_B64' PACT_CI_PASSWORD_B64='$CI_PASSWORD_B64' PACT_CI_SSHKEYS_B64='$CI_SSHKEYS_B64' ./$WORK_DIR_NAME/proxmox.sh ${PROXMOX_SCRIPT_ARGS[*]}
         proxmox_rc=\$?
         rm -rf ./$WORK_DIR_NAME
         exit \$proxmox_rc
@@ -1014,6 +1142,11 @@ else
         PROXMOX_SCRIPT_ARGS+=("--run-packer")
     fi
 
+    # Add customize-cloudinit flag if enabled (values travel via PACT_CI_*_B64 env vars below)
+    if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
+        PROXMOX_SCRIPT_ARGS+=("--customize-cloudinit")
+    fi
+
     # Add build list to arguments
     if [ -n "$BUILD_DISTROS" ]; then
         PROXMOX_SCRIPT_ARGS+=("--build=$BUILD_DISTROS")
@@ -1024,7 +1157,8 @@ else
     cp "$SCRIPT_DIR/proxmox.sh" "./$WORK_DIR_NAME/"
     chmod +x "./$WORK_DIR_NAME/proxmox.sh"
 
-    "./$WORK_DIR_NAME/proxmox.sh" "${PROXMOX_SCRIPT_ARGS[@]}"
+    PACT_CI_USER_B64="$CI_USER_B64" PACT_CI_PASSWORD_B64="$CI_PASSWORD_B64" PACT_CI_SSHKEYS_B64="$CI_SSHKEYS_B64" \
+        "./$WORK_DIR_NAME/proxmox.sh" "${PROXMOX_SCRIPT_ARGS[@]}"
     proxmox_exit=$?
 
     # Cleanup working directory
