@@ -1,0 +1,24 @@
+---
+# Example variables for custom-playbook.yml
+#
+# Pass with:  --custom-ansible-varfile=./examples/playbooks/custom-vars.yml
+# (build.sh feeds it to Ansible as an extra-vars file).
+
+# Primary user created on every image
+vm_username: "admin"
+
+# SSH public key installed for that user. Leave "" to skip.
+vm_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAExampleReplaceWithYourKey you@example.com"
+
+# Extra packages installed on every image (names valid across apt/dnf)
+extra_packages:
+  - git
+  - htop
+  - vim
+  - curl
+
+# Harden SSH by turning off password logins (key-only). true/false.
+disable_ssh_passwords: false
+
+# One-line /etc/motd banner. Leave "" to skip.
+motd_banner: "Managed by Proxmox-PACT - do not edit by hand"

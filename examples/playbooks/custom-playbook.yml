@@ -1,0 +1,77 @@
+---
+# Example custom Ansible playbook for Proxmox-PACT
+#
+# Pass it to build.sh with:
+#   --custom-ansible-playbook=./examples/playbooks/custom-playbook.yml \
+#   --custom-ansible-varfile=./examples/playbooks/custom-vars.yml
+# (both also accept an https:// URL). It runs inside the Packer phase, so it
+# requires --run-packer. Variables below come from custom-vars.yml.
+#
+# This is a starting point - add, remove, or edit tasks for your own images.
+# The os_family checks keep it working across Debian/Ubuntu and Fedora.
+
+- hosts: all
+  become: true
+  tasks:
+
+    - name: Update package cache and upgrade (Debian/Ubuntu)
+      apt:
+        update_cache: true
+        upgrade: dist
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+
+    - name: Update all packages (Fedora/RHEL)
+      dnf:
+        name: "*"
+        state: latest
+      when: ansible_os_family == "RedHat"
+
+    - name: Install a common package set
+      package:
+        name: "{{ extra_packages }}"
+        state: present
+
+    - name: Create the primary user
+      user:
+        name: "{{ vm_username }}"
+        shell: /bin/bash
+        create_home: true
+        groups: "{{ 'sudo' if ansible_os_family == 'Debian' else 'wheel' }}"
+        append: true
+
+    - name: Ensure the user's .ssh directory exists
+      file:
+        path: "/home/{{ vm_username }}/.ssh"
+        state: directory
+        owner: "{{ vm_username }}"
+        group: "{{ vm_username }}"
+        mode: '0700'
+      when: vm_pubkey | length > 0
+
+    - name: Install the user's SSH public key
+      lineinfile:
+        path: "/home/{{ vm_username }}/.ssh/authorized_keys"
+        line: "{{ vm_pubkey }}"
+        create: true
+        owner: "{{ vm_username }}"
+        group: "{{ vm_username }}"
+        mode: '0600'
+      when: vm_pubkey | length > 0
+
+    - name: Disable SSH password authentication (key-only login)
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+        state: present
+      when: disable_ssh_passwords | bool
+
+    - name: Set the message of the day
+      copy:
+        content: "{{ motd_banner }}\n"
+        dest: /etc/motd
+        owner: root
+        group: root
+        mode: '0644'
+      when: motd_banner | length > 0
