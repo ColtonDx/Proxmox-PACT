@@ -3,7 +3,7 @@
 #
 # This Packer template can build images for multiple distributions by passing
 # the 'distro' variable. Supported distros:
-#   - debian11, debian12, debian13
+#   - debian12, debian13
 #   - ubuntu2204, ubuntu2404, ubuntu2604
 #   - fedora43, fedora44
 #
@@ -64,7 +64,7 @@ variable "vmid" {
 
 variable "distro" {
   type        = string
-  description = "Distribution to build (debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora43, fedora44)"
+  description = "Distribution to build (debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora43, fedora44)"
 }
 
 variable "ansible_playbook" {
@@ -82,10 +82,6 @@ variable "ansible_varfile" {
 # Locals for distro-specific configuration
 locals {
   distro_config = {
-    debian11 = {
-      template_name = "Template-Debian-11"
-      vm_name       = "PACT-Debian-11"
-    }
     debian12 = {
       template_name = "Template-Debian-12"
       vm_name       = "PACT-Debian-12"

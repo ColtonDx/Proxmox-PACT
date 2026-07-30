@@ -31,12 +31,12 @@
 # (base64-encoded so arbitrary content survives the SSH command line intact).
 #
 # Distro Options:
-#   Individual: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora43, fedora44
+#   Individual: debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora43, fedora44
 #   Groups:     debian (all Debian versions), ubuntu (all Ubuntu versions), fedora (all Fedora versions)
 #   Special:    all (create all distros)
 #
 # VMIDs Assignment (with default VMID_BASE=800):
-#   debian11: 801,   debian12: 802,   debian13: 803
+#   debian12: 802,   debian13: 803
 #   ubuntu2204: 811, ubuntu2404: 812, ubuntu2604: 814
 #   fedora43: 823,   fedora44: 824
 #
@@ -61,9 +61,8 @@ DEFAULT_VMID_BASE=800
 DEFAULT_PROXMOX_STORAGE="local-lvm"
 
 # Define distro metadata: id|name|vmid_offset|filename|download_url
-# The id field is used for filtering (debian11, ubuntu2404, etc.)
+# The id field is used for filtering (debian12, ubuntu2404, etc.)
 declare -a DISTRO_METADATA=(
-    "debian11|Debian-11|1|debian-11-template.qcow2|https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-genericcloud-amd64.qcow2"
     "debian12|Debian-12|2|debian-12-template.qcow2|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
     "debian13|Debian-13|3|debian-13-template.qcow2|https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
     "ubuntu2204|Ubuntu-2204|11|ubuntu-2204-template.img|https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"
@@ -88,7 +87,7 @@ Options:
     --proxmox-storage=NAME Storage pool to use. Defaults to ${DEFAULT_PROXMOX_STORAGE}.
     --build=LIST      Comma-separated list of distros to build. Special values:
                         all      - build every distro (default)
-                        debian   - debian11, debian12, debian13
+                        debian   - debian12, debian13
                         ubuntu   - ubuntu2204, ubuntu2404, ubuntu2604
                       Individual names: ${DISTRO_IDS[*]}
     --rebuild-templates     Delete existing VMs at target VMIDs before building (destructive).

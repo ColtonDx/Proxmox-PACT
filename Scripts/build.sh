@@ -251,7 +251,7 @@ if [ "${#DISTRO_IDS[@]}" -eq 0 ]; then
 fi
 
 # Expand a build spec into concrete distro ids. Accepts "all", individual ids, or a
-# group prefix (e.g. "debian" -> debian11/12/13). Prints the de-duped id list and
+# group prefix (e.g. "debian" -> debian12/13). Prints the de-duped id list and
 # returns 0; on an unknown token prints an error and returns 1.
 expand_selected() {
     local spec="$1" token id out="" bad=""
@@ -334,7 +334,7 @@ Notes:
   - If --interactive is set, no other arguments are allowed (it overrides everything).
   - Without --local, defaults to SSH mode (remote Proxmox).
   - Without --rebuild-templates, existing VMs at target VMIDs are preserved (safer).
-  - --build-distros accepts: all, debian, ubuntu, fedora, individual names (debian11, debian12, ubuntu2204, fedora43, etc.)
+  - --build-distros accepts: all, debian, ubuntu, fedora, individual names (debian12, debian13, ubuntu2204, fedora43, etc.)
   - --custom-packerfile allows using a custom Packer template with --run-packer.
   - --customize-cloudinit requires at least one of --cloudinit-user, --cloudinit-password,
     --cloudinit-ssh-keys, or --cloudinit-ssh-key-file.
