@@ -1067,31 +1067,34 @@ if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
     CI_SSHKEYS_B64="$(printf '%s' "$CLOUDINIT_SSH_KEYS" | base64 | tr -d '\n')"
 fi
 
+# Arguments for proxmox.sh. Built once here rather than per-branch: remote and local mode
+# pass an identical argument list (they differ only in how the script is delivered and
+# invoked), so keeping a single copy means a new flag can't be added to one path and
+# silently forgotten on the other.
+PROXMOX_SCRIPT_ARGS=("--vmid-base=$VMID_BASE" "--proxmox-storage=$PROXMOX_STORAGE")
+
+# Add rebuild flag if enabled
+if [ "$REBUILD_TEMPLATES" = true ]; then
+    PROXMOX_SCRIPT_ARGS+=("--rebuild-templates")
+fi
+
+# Add run-packer flag if Packer will be run
+if [ "$RUN_PACKER" = true ]; then
+    PROXMOX_SCRIPT_ARGS+=("--run-packer")
+fi
+
+# Add customize-cloudinit flag if enabled (values travel via the PACT_CI_*_B64 env vars)
+if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
+    PROXMOX_SCRIPT_ARGS+=("--customize-cloudinit")
+fi
+
+# Add build list to arguments
+if [ -n "$BUILD_DISTROS" ]; then
+    PROXMOX_SCRIPT_ARGS+=("--build=$BUILD_DISTROS")
+fi
+
 # Run proxmox.sh to create templates (SSH to remote or run locally)
 if [ "$PROXMOX_IS_REMOTE" = true ]; then
-    # Build proxmox.sh arguments based on configuration
-    PROXMOX_SCRIPT_ARGS=("--vmid-base=$VMID_BASE" "--proxmox-storage=$PROXMOX_STORAGE")
-
-    # Add rebuild flag if enabled
-    if [ "$REBUILD_TEMPLATES" = true ]; then
-        PROXMOX_SCRIPT_ARGS+=("--rebuild-templates")
-    fi
-
-    # Add run-packer flag if Packer will be run
-    if [ "$RUN_PACKER" = true ]; then
-        PROXMOX_SCRIPT_ARGS+=("--run-packer")
-    fi
-
-    # Add customize-cloudinit flag if enabled (values travel via PACT_CI_*_B64 env vars below)
-    if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
-        PROXMOX_SCRIPT_ARGS+=("--customize-cloudinit")
-    fi
-
-    # Add build list to arguments
-    if [ -n "$BUILD_DISTROS" ]; then
-        PROXMOX_SCRIPT_ARGS+=("--build=$BUILD_DISTROS")
-    fi
-
     # Verify the private key file exists when key auth is requested.
     if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
         if [ ! -f "$SSH_PRIVATE_KEY_PATH" ]; then
@@ -1130,27 +1133,6 @@ EOF
 else
     # Run proxmox.sh locally
     echo "Running proxmox.sh locally..."
-
-    # Build proxmox.sh arguments
-    PROXMOX_SCRIPT_ARGS=("--vmid-base=$VMID_BASE" "--proxmox-storage=$PROXMOX_STORAGE")
-
-    if [ "$REBUILD_TEMPLATES" = true ]; then
-        PROXMOX_SCRIPT_ARGS+=("--rebuild-templates")
-    fi
-
-    if [ "$RUN_PACKER" = true ]; then
-        PROXMOX_SCRIPT_ARGS+=("--run-packer")
-    fi
-
-    # Add customize-cloudinit flag if enabled (values travel via PACT_CI_*_B64 env vars below)
-    if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
-        PROXMOX_SCRIPT_ARGS+=("--customize-cloudinit")
-    fi
-
-    # Add build list to arguments
-    if [ -n "$BUILD_DISTROS" ]; then
-        PROXMOX_SCRIPT_ARGS+=("--build=$BUILD_DISTROS")
-    fi
 
     # Create unique local working directory and run
     mkdir -p "./$WORK_DIR_NAME"
