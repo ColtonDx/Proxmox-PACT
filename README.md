@@ -84,6 +84,29 @@ distro you build) and can be combined with any of the standard config methods: C
 flags, `PACT_CUSTOMIZE_CLOUDINIT` / `PACT_CLOUDINIT_*` env vars, or the `.env.local`
 answerfile.
 
+### Don't have an SSH key yet?
+
+When prompted for the SSH key, the first option generates one for you:
+
+```
+  SSH public key for the Cloud-Init user:
+    1) Generate a new key pair for me
+    2) Read one from a file (use this for multiple keys)
+    3) Paste a single key
+    4) Skip - don't set an SSH key
+```
+
+Option 1 creates an ed25519 pair (default `~/.ssh/pact-<timestamp>`, no passphrase, so
+first login is unattended) and injects the public half into every template it builds. It
+will not overwrite an existing file. You can also ask for a **PuTTY `.ppk`** for
+PuTTY/WinSCP on Windows — needs `puttygen` (`putty-tools`), which it offers to install,
+and produces a PPK v3 file readable by PuTTY 0.75 and newer.
+
+When the build finishes, the key paths are printed last, along with the exact `ssh -i`
+command to log in. You can optionally have the private key itself printed to the
+terminal — handy when you're building on a remote box, but it does leave the key in your
+scrollback, so it's off by default.
+
 ## Examples
 
 Copy-paste configs, one-liners, answerfiles, and a sample playbook live in

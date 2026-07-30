@@ -173,6 +173,12 @@ CLOUDINIT_USER=""
 CLOUDINIT_PASSWORD=""
 CLOUDINIT_SSH_KEYS=""
 CLOUDINIT_SSH_KEY_FILE=""
+# Set only when interactive setup generates a key pair for the user (see generate_ssh_key).
+# The paths are reported after the build so they aren't buried under the build output.
+GENERATED_KEY_PATH=""
+GENERATED_PPK_PATH=""
+WANT_PPK=false
+PRINT_PRIVATE_KEY=false
 
 #####################################################################################
 # LOAD ANSWERFILE (.env.local by default, or --answerfile-path / PACT_ANSWERFILE_PATH)
@@ -279,6 +285,54 @@ expand_selected() {
 # Selected distros to build (space-separated list of distro IDs)
 SELECTED_DISTROS=""
 
+# Generate a fresh SSH key pair for Cloud-Init, for users who don't already have one.
+# On success sets CLOUDINIT_SSH_KEYS to the public key (so it gets baked into the
+# templates like any other key) and records GENERATED_KEY_PATH for the post-build report.
+# Returns 1 without touching CLOUDINIT_SSH_KEYS if the key could not be created, so the
+# caller can re-offer the menu instead of silently continuing with no key.
+generate_ssh_key() {
+    if ! command -v ssh-keygen &>/dev/null; then
+        echo "  Error: ssh-keygen not found (install openssh-client). Pick another option." >&2
+        return 1
+    fi
+
+    local default_path key_path=""
+    default_path="$HOME/.ssh/pact-$(date +%Y%m%d-%H%M%S)"
+    read -p "  Path for the new key [$default_path]: " -r key_path
+    key_path="${key_path:-$default_path}"
+    key_path="${key_path/#\~/$HOME}"
+    if [ -e "$key_path" ] || [ -e "$key_path.pub" ]; then
+        echo "  Error: $key_path already exists - refusing to overwrite an existing key." >&2
+        return 1
+    fi
+    if ! mkdir -p "$(dirname "$key_path")" 2>/dev/null; then
+        echo "  Error: could not create $(dirname "$key_path")" >&2
+        return 1
+    fi
+
+    # ed25519: supported by every cloud image we build and by PuTTY 0.75+. No passphrase
+    # (-N ""), because the point is an unattended first login to a fresh VM; the private
+    # key lands in the user's ~/.ssh with ssh-keygen's default 0600.
+    if ! ssh-keygen -t ed25519 -N "" -C "proxmox-pact-$(date +%Y%m%d)" -f "$key_path" >/dev/null; then
+        echo "  Error: ssh-keygen failed to create $key_path" >&2
+        return 1
+    fi
+
+    CLOUDINIT_SSH_KEYS="$(cat "$key_path.pub")"
+    GENERATED_KEY_PATH="$key_path"
+    echo "  Created $key_path and $key_path.pub"
+
+    # The .ppk conversion itself is deferred to report_generated_key(), which runs after
+    # install_pkgs() is defined and so can install putty-tools if it's missing.
+    read -p "  Also create a PuTTY .ppk file (for PuTTY/WinSCP on Windows)? (y/N): " -r _ppk_choice
+    [[ "$_ppk_choice" =~ ^[Yy]$ ]] && WANT_PPK=true
+
+    read -p "  Print the private key to this terminal when the build finishes? (y/N): " -r _print_choice
+    [[ "$_print_choice" =~ ^[Yy]$ ]] && PRINT_PRIVATE_KEY=true
+
+    return 0
+}
+
 # Interactively prompt for optional Cloud-Init defaults, setting CLOUDINIT_USER,
 # CLOUDINIT_PASSWORD, and CLOUDINIT_SSH_KEYS. Shared by full --interactive mode and the
 # non-interactive gap-fill prompt (used when --customize-cloudinit is set with no values).
@@ -287,17 +341,29 @@ prompt_cloudinit_values() {
     echo "  Warning: a Cloud-Init password is stored in PLAINTEXT in the Proxmox VM config (qm config); SSH keys are safer."
     read -sp "  Cloud-Init password (blank to skip): " -r CLOUDINIT_PASSWORD
     echo ""
-    read -p "  SSH public key file path (blank to paste a single key instead; use a file for multiple keys): " -r _ci_keyfile
-    if [ -n "$_ci_keyfile" ]; then
-        _ci_keyfile="${_ci_keyfile/#\~/$HOME}"
-        if [ -f "$_ci_keyfile" ]; then
-            CLOUDINIT_SSH_KEYS="$(cat "$_ci_keyfile")"
-        else
-            echo "  Warning: file not found: $_ci_keyfile - skipping SSH key." >&2
-        fi
-    else
-        read -p "  Paste a single SSH public key (blank to skip): " -r CLOUDINIT_SSH_KEYS
-    fi
+
+    local choice="" keyfile=""
+    while true; do
+        echo "  SSH public key for the Cloud-Init user:"
+        echo "    1) Generate a new key pair for me"
+        echo "    2) Read one from a file (use this for multiple keys)"
+        echo "    3) Paste a single key"
+        echo "    4) Skip - don't set an SSH key"
+        read -p "  Choice [4]: " -r choice
+        case "${choice:-4}" in
+            1) generate_ssh_key && break ;;
+            2) read -p "  SSH public key file path: " -r keyfile
+               keyfile="${keyfile/#\~/$HOME}"
+               if [ -f "$keyfile" ]; then
+                   CLOUDINIT_SSH_KEYS="$(cat "$keyfile")"
+                   break
+               fi
+               echo "  File not found: $keyfile" >&2 ;;
+            3) read -p "  Paste a single SSH public key: " -r CLOUDINIT_SSH_KEYS; break ;;
+            4) break ;;
+            *) echo "  Please enter 1, 2, 3, or 4." >&2 ;;
+        esac
+    done
 }
 
 print_usage() {
@@ -978,6 +1044,53 @@ install_pkgs() {
     esac || { echo "Error: failed to install: ${missing[*]}" >&2; return 1; }
 }
 
+# Report a key created by generate_ssh_key, and do the deferred .ppk conversion (deferred
+# so install_pkgs is available for putty-tools). Called at the very end of the run so the
+# paths are the last thing on screen instead of being buried under the build output.
+report_generated_key() {
+    [ -z "$GENERATED_KEY_PATH" ] && return 0
+
+    if [ "$WANT_PPK" = true ]; then
+        if ! command -v puttygen &>/dev/null; then
+            echo "Installing putty-tools for the .ppk conversion ..."
+            install_pkgs putty-tools >/dev/null 2>&1 || true
+        fi
+        if command -v puttygen &>/dev/null; then
+            if puttygen "$GENERATED_KEY_PATH" -O private -o "$GENERATED_KEY_PATH.ppk" 2>/dev/null; then
+                chmod 600 "$GENERATED_KEY_PATH.ppk"
+                GENERATED_PPK_PATH="$GENERATED_KEY_PATH.ppk"
+            else
+                echo "Warning: puttygen could not convert the key; skipping the .ppk file." >&2
+            fi
+        else
+            echo "Warning: puttygen unavailable (install putty-tools); skipping the .ppk file." >&2
+        fi
+    fi
+
+    echo ""
+    echo "=== SSH key for Cloud-Init ==="
+    echo "  Private key : $GENERATED_KEY_PATH"
+    echo "  Public key  : $GENERATED_KEY_PATH.pub"
+    [ -n "$GENERATED_PPK_PATH" ] && echo "  PuTTY key   : $GENERATED_PPK_PATH"
+    # Kept in a variable rather than inline: a ${VAR:-default} containing an apostrophe
+    # inside a double-quoted string is a bash quoting trap.
+    local login_user="$CLOUDINIT_USER"
+    [ -z "$login_user" ] && login_user="<image default user>"
+
+    echo ""
+    echo "  The public key is baked into the templates. Once a VM cloned from one has an IP:"
+    echo "    ssh -i $GENERATED_KEY_PATH $login_user@<vm-ip>"
+    echo ""
+    echo "  Keep the private key safe - anything cloned from these templates trusts it."
+
+    if [ "$PRINT_PRIVATE_KEY" = true ]; then
+        echo ""
+        echo "  Private key follows. It stays in this terminal scrollback:"
+        echo ""
+        cat "$GENERATED_KEY_PATH"
+    fi
+}
+
 # Warn (and, on a TTY, confirm) before installing tooling on what looks like a Proxmox host.
 warn_local_install() {
     [ "$ON_PROXMOX" != true ] && return 0
@@ -1191,3 +1304,5 @@ fi
 echo ""
 echo "=== Build Complete ==="
 echo "Template build process finished successfully!"
+
+report_generated_key

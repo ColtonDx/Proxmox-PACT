@@ -8,3 +8,8 @@ pact_build_*/
 
 # Local answerfile (may contain SSH passwords / API tokens)
 .env.local
+
+# SSH keys from interactive Cloud-Init setup. These default to ~/.ssh, but the prompt
+# accepts any path, so guard against a private key being committed from the repo root.
+pact-*
+*.ppk
