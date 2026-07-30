@@ -15,11 +15,15 @@
 packer {
   required_plugins {
     proxmox = {
-      version = ">= 1.2.2"
+      version = ">= 1.2.4"
       source  = "github.com/hashicorp/proxmox"
     }
     ansible = {
-      version = ">= 1.0.0, < 1.1.4"
+      # The old "< 1.1.4" ceiling existed because 1.1.4 stopped attaching binaries to
+      # GitHub Releases, which the pinned Packer 1.11.2 still fetched from. Packer 1.16
+      # resolves plugins from the HashiCorp release site, so the ceiling is no longer
+      # needed - and lifting it picks up the x/crypto and x/net security bumps in 1.1.5+.
+      version = ">= 1.1.6"
       source  = "github.com/hashicorp/ansible"
     }
   }

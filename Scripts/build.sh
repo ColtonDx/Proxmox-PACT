@@ -1031,7 +1031,7 @@ fi
 if [ "$RUN_PACKER" = true ]; then
     # Keep this in sync with .github/workflows/ci.yml (the setup-packer version) so the
     # template is built with the same Packer that CI validates it against.
-    PACKER_VERSION="1.11.2"
+    PACKER_VERSION="1.16.0"
     if ! command -v packer &> /dev/null; then
         echo "Packer is not installed. Installing Packer ${PACKER_VERSION}..."
         packer_zip="packer_${PACKER_VERSION}_linux_amd64.zip"
