@@ -63,6 +63,21 @@ automatically.
 
 Full flag list and answerfile settings: **[CLI Reference](../../wiki/CLI-Reference)**.
 
+## Image verification
+
+Every cloud image is checked against the checksum its distro publishes before anything
+else happens to it — the verification runs *before* `virt-customize` touches the image
+and before it is imported into Proxmox storage, so a corrupt or tampered download can
+never become a template. On a mismatch the build stops and the image is deleted.
+
+This is on by default and needs no configuration. PACT tracks the checksum file for each
+distro alongside its image URL and handles the three published formats (Debian
+`SHA512SUMS`, Ubuntu `SHA256SUMS`, Fedora `*-CHECKSUM`).
+
+If a mirror's checksum file is temporarily unreachable and you need to build anyway,
+`--skip-checksum-verify` (or `SKIP_CHECKSUM_VERIFY=true`) opts out for that run and logs
+a warning. Only reach for it when you have to.
+
 ## Cloud-Init customization
 
 By default, templates ship with an empty Cloud-Init drive — you set the username,

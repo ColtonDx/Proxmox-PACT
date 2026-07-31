@@ -60,16 +60,23 @@
 DEFAULT_VMID_BASE=800
 DEFAULT_PROXMOX_STORAGE="local-lvm"
 
-# Define distro metadata: id|name|vmid_offset|filename|download_url
+# Define distro metadata: id|name|vmid_offset|filename|download_url|checksum_url|checksum_algo
 # The id field is used for filtering (debian12, ubuntu2404, etc.)
+#
+# checksum_url points at the checksum file the distro publishes alongside the image, and
+# checksum_algo selects the tool used to verify it (sha512 -> sha512sum, etc). Three
+# different layouts are in play and verify_image_checksum() handles all of them:
+#   Debian  SHA512SUMS  GNU coreutils : "<hash>  <name>"
+#   Ubuntu  SHA256SUMS  GNU, binary   : "<hash> *<name>"
+#   Fedora  *-CHECKSUM  BSD tagged    : "SHA256 (<name>) = <hash>"
 declare -a DISTRO_METADATA=(
-    "debian12|Debian-12|2|debian-12-template.qcow2|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
-    "debian13|Debian-13|3|debian-13-template.qcow2|https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
-    "ubuntu2204|Ubuntu-2204|11|ubuntu-2204-template.img|https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"
-    "ubuntu2404|Ubuntu-2404|12|ubuntu-2404-template.img|https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
-    "ubuntu2604|Ubuntu-2604|14|ubuntu-2604-template.img|https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img"
-    "fedora43|Fedora-43|23|fedora-43-template.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2"
-    "fedora44|Fedora-44|24|fedora-44-template.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
+    "debian12|Debian-12|2|debian-12-template.qcow2|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2|https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS|sha512"
+    "debian13|Debian-13|3|debian-13-template.qcow2|https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2|https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS|sha512"
+    "ubuntu2204|Ubuntu-2204|11|ubuntu-2204-template.img|https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img|https://cloud-images.ubuntu.com/releases/22.04/release/SHA256SUMS|sha256"
+    "ubuntu2404|Ubuntu-2404|12|ubuntu-2404-template.img|https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img|https://cloud-images.ubuntu.com/releases/24.04/release/SHA256SUMS|sha256"
+    "ubuntu2604|Ubuntu-2604|14|ubuntu-2604-template.img|https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img|https://cloud-images.ubuntu.com/releases/26.04/release/SHA256SUMS|sha256"
+    "fedora43|Fedora-43|23|fedora-43-template.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-43-1.6-x86_64-CHECKSUM|sha256"
+    "fedora44|Fedora-44|24|fedora-44-template.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-44-1.7-x86_64-CHECKSUM|sha256"
 )
 
 # List of known distro ids, derived from DISTRO_METADATA above (single source of truth).
@@ -93,6 +100,9 @@ Options:
     --rebuild-templates     Delete existing VMs at target VMIDs before building (destructive).
                       Without this flag, existing VMs are preserved.
     --run-packer      Packer will be used for customization. Checks both base and packer VMIDs.
+    --skip-checksum-verify  Do NOT verify downloaded images against the distro's published
+                      checksum. Verification is on by default; only skip it if a mirror's
+                      checksum file is unavailable.
     --customize-cloudinit    Apply Cloud-Init defaults (username/password/SSH key) to created templates.
     --cloudinit-user=USER    Cloud-Init default username (requires --customize-cloudinit).
     --cloudinit-password=PASS  Cloud-Init default password (plaintext in the VM config; SSH keys are safer).
@@ -107,6 +117,7 @@ PROXMOX_STORAGE="${PROXMOX_STORAGE:-$DEFAULT_PROXMOX_STORAGE}"
 BUILD_DISTROS="all"
 REBUILD_TEMPLATES=false
 RUN_PACKER=false
+VERIFY_CHECKSUMS=true
 CUSTOMIZE_CLOUDINIT=false
 CLOUDINIT_USER=""
 CLOUDINIT_PASSWORD=""
@@ -131,6 +142,7 @@ for arg in "$@"; do
         --rebuild-templates) REBUILD_TEMPLATES=true ;;
         --run-packer) RUN_PACKER=true ;;
         --packer-enabled) RUN_PACKER=true ;;
+        --skip-checksum-verify) VERIFY_CHECKSUMS=false ;;
         --customize-cloudinit) CUSTOMIZE_CLOUDINIT=true ;;
         --cloudinit-user=*) CLOUDINIT_USER="${arg#*=}" ;;
         --cloudinit-password=*) CLOUDINIT_PASSWORD="${arg#*=}" ;;
@@ -176,7 +188,59 @@ fi
 # Remove duplicates and normalize spacing
 SELECTED_DISTROS="$(echo "$SELECTED_DISTROS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)"
 
-echo "Using VMID_BASE=${VMID_BASE}, storage=${PROXMOX_STORAGE}, build='${BUILD_DISTROS}', selected='${SELECTED_DISTROS}', rebuild-templates=${REBUILD_TEMPLATES}, run-packer=${RUN_PACKER}, customize-cloudinit=${CUSTOMIZE_CLOUDINIT}"
+echo "Using VMID_BASE=${VMID_BASE}, storage=${PROXMOX_STORAGE}, build='${BUILD_DISTROS}', selected='${SELECTED_DISTROS}', rebuild-templates=${REBUILD_TEMPLATES}, run-packer=${RUN_PACKER}, customize-cloudinit=${CUSTOMIZE_CLOUDINIT}, verify-checksums=${VERIFY_CHECKSUMS}"
+
+# Verify a downloaded image against the checksum its distro publishes alongside it.
+#
+# The checksum file lists the *upstream* filename, which is not the name we save the image
+# under locally, so matching is done on the basename taken from the download URL. Both
+# published layouts are handled: the GNU coreutils one used by Debian and Ubuntu
+# ("<hash>  name", or "<hash> *name" in binary mode) and the BSD tagged one used by Fedora
+# ("SHA256 (name) = <hash>"). On mismatch the image is deleted so a bad download can never
+# reach virt-customize or get imported into Proxmox storage.
+verify_image_checksum() {
+    local image="$1" download_url="$2" checksum_url="$3" algo="$4" label="$5"
+    local remote_name="${download_url##*/}"
+    local sumfile="$WORKING_DIR/checksums.tmp"
+    local expected actual
+
+    if ! command -v "${algo}sum" >/dev/null 2>&1; then
+        echo "Error: ${algo}sum not found; cannot verify $label." >&2
+        return 1
+    fi
+
+    echo "Verifying $label against $checksum_url"
+    if ! curl -fsSL --retry 3 --retry-delay 2 -o "$sumfile" "$checksum_url"; then
+        echo "Error: could not download the checksum file for $label from $checksum_url" >&2
+        echo "       Pass --skip-checksum-verify to build without verification." >&2
+        return 1
+    fi
+
+    expected="$(awk -v f="$remote_name" '
+        # BSD tagged: SHA256 (name) = hash
+        /^[A-Za-z0-9]+ \(/ { n = $2; gsub(/[()]/, "", n); if (n == f) { print $NF; exit } next }
+        # GNU coreutils: hash  name   (binary mode prefixes the name with *)
+        NF >= 2            { n = $2; sub(/^\*/, "", n); if (n == f) { print $1; exit } }
+    ' "$sumfile" | tr '[:upper:]' '[:lower:]')"
+    rm -f "$sumfile"
+
+    if [ -z "$expected" ]; then
+        echo "Error: $checksum_url lists no $algo checksum for $remote_name" >&2
+        return 1
+    fi
+
+    actual="$("${algo}sum" "$image" | awk '{print $1}')"
+    if [ "$expected" != "$actual" ]; then
+        echo "Error: $algo checksum MISMATCH for $label" >&2
+        echo "       expected: $expected" >&2
+        echo "       actual:   $actual" >&2
+        echo "       The download is corrupt or has been tampered with; discarding it." >&2
+        rm -f "$image"
+        return 1
+    fi
+
+    echo "Checksum OK ($algo)"
+}
 
 # Create and configure a VM template
 create_template() {
@@ -185,6 +249,8 @@ create_template() {
     local filename="$3"
     local download_url="$4"
     local proxmox_storage="$5"
+    local checksum_url="$6"
+    local checksum_algo="$7"
     local image="$WORKING_DIR/$filename"
 
     echo "Downloading the image from $download_url"
@@ -193,6 +259,20 @@ create_template() {
     if ! curl -fSL --retry 3 --retry-delay 2 -o "$image" "$download_url"; then
         echo "Error: failed to download image for $template_name from $download_url" >&2
         return 1
+    fi
+
+    # Verify before virt-customize touches the image (which would change its hash).
+    if [ "$VERIFY_CHECKSUMS" = true ]; then
+        if [ -z "$checksum_url" ]; then
+            echo "Error: no checksum URL defined for $template_name." >&2
+            echo "       Pass --skip-checksum-verify to build without verification." >&2
+            return 1
+        fi
+        if ! verify_image_checksum "$image" "$download_url" "$checksum_url" "$checksum_algo" "$template_name"; then
+            return 1
+        fi
+    else
+        echo "WARNING: skipping checksum verification for $template_name (--skip-checksum-verify)." >&2
     fi
 
     echo "Installing qemu-guest-agent into the image"
@@ -285,7 +365,7 @@ fi
 
 # Process all selected distros
 for distro_config in "${DISTRO_METADATA[@]}"; do
-    IFS='|' read -r distro_id distro_name offset filename url <<< "$distro_config"
+    IFS='|' read -r distro_id distro_name offset filename url checksum_url checksum_algo <<< "$distro_config"
     
     # Check if this distro was selected for building
     if [[ " $SELECTED_DISTROS " != *" $distro_id "* ]]; then
@@ -302,7 +382,7 @@ for distro_config in "${DISTRO_METADATA[@]}"; do
     
     # Build the template
     echo "Creating base ${distro_name} Template"
-    if ! create_template "$vmid" "$template_name" "$filename" "$url" "$PROXMOX_STORAGE"; then
+    if ! create_template "$vmid" "$template_name" "$filename" "$url" "$PROXMOX_STORAGE" "$checksum_url" "$checksum_algo"; then
         echo "Error: failed to build ${distro_name} template (VMID $vmid). Aborting." >&2
         exit 1
     fi

@@ -49,6 +49,7 @@
 #   --custom-ansible-varfile=PATH  Path to custom variables file for Ansible in Packer
 #   --packer-token-id=TOKEN        Proxmox API Token ID for Packer
 #   --packer-token-secret=SEC      Proxmox API Token Secret for Packer
+#   --skip-checksum-verify         Skip verifying downloaded images against published checksums
 #   --customize-cloudinit          Bake Cloud-Init defaults (username/password/SSH key) into templates
 #   --cloudinit-user=USER          Cloud-Init default username (requires --customize-cloudinit)
 #   --cloudinit-password=PASS      Cloud-Init default password (plaintext in the VM config; SSH keys are safer)
@@ -73,6 +74,7 @@
 #   CUSTOM_PACKERFILE              Custom Packer template path (optional)
 #   CUSTOM_ANSIBLE_PLAYBOOK        Custom Ansible playbook for Packer (optional)
 #   CUSTOM_ANSIBLE_VARFILE         Custom Ansible variables file for Packer (optional)
+#   SKIP_CHECKSUM_VERIFY           Skip image checksum verification (true/false, default: false)
 #   CUSTOMIZE_CLOUDINIT            Bake Cloud-Init defaults into templates (true/false, default: false)
 #   CLOUDINIT_USER                 Cloud-Init default username (optional, requires CUSTOMIZE_CLOUDINIT=true)
 #   CLOUDINIT_PASSWORD             Cloud-Init default password (optional; stored in plaintext by Proxmox)
@@ -168,6 +170,7 @@ BUILD_DISTROS=""
 PACKER_TOKEN_ID=""
 PACKER_TOKEN_SECRET=""
 ANSWERFILE_PATH=""
+SKIP_CHECKSUM_VERIFY=false
 CUSTOMIZE_CLOUDINIT=false
 CLOUDINIT_USER=""
 CLOUDINIT_PASSWORD=""
@@ -230,6 +233,7 @@ fi
 [ -n "${PACT_PROXMOX_STORAGE:-}" ] && PROXMOX_STORAGE="${PACT_PROXMOX_STORAGE}"
 [ -n "${PACT_PROXMOX_TARGET_NODE:-}" ] && PROXMOX_TARGET_NODE="${PACT_PROXMOX_TARGET_NODE}"
 [ -n "${PACT_VMID_BASE:-}" ] && VMID_BASE="${PACT_VMID_BASE}"
+[ -n "${PACT_SKIP_CHECKSUM_VERIFY:-}" ] && SKIP_CHECKSUM_VERIFY="${PACT_SKIP_CHECKSUM_VERIFY}"
 [ -n "${PACT_CUSTOMIZE_CLOUDINIT:-}" ] && CUSTOMIZE_CLOUDINIT="${PACT_CUSTOMIZE_CLOUDINIT}"
 [ -n "${PACT_CLOUDINIT_USER:-}" ] && CLOUDINIT_USER="${PACT_CLOUDINIT_USER}"
 [ -n "${PACT_CLOUDINIT_PASSWORD:-}" ] && CLOUDINIT_PASSWORD="${PACT_CLOUDINIT_PASSWORD}"
@@ -389,6 +393,8 @@ Options:
   --custom-ansible-varfile=PATH  Path or URL to custom variables file for Ansible playbook (default: ./Ansible/Variables/vars.yml).
   --packer-token-id=TOKEN    Proxmox API Token ID for Packer (required with --run-packer).
   --packer-token-secret=SEC  Proxmox API Token Secret for Packer (required with --run-packer).
+  --skip-checksum-verify     Do not verify downloaded images against the distro's published
+                             checksum (verification is on by default).
   --customize-cloudinit      Bake Cloud-Init defaults (username/password/SSH key) into the templates.
   --cloudinit-user=USER      Cloud-Init default username (with --customize-cloudinit).
   --cloudinit-password=PASS  Cloud-Init default password (plaintext in the VM config; SSH keys are safer).
@@ -469,6 +475,12 @@ for arg in "$@"; do
             ;;
         --packer-token-secret=*)
             PACKER_TOKEN_SECRET="${arg#*=}"
+            ;;
+        --skip-checksum-verify|--skip-checksum-verify=true)
+            SKIP_CHECKSUM_VERIFY=true
+            ;;
+        --skip-checksum-verify=false)
+            SKIP_CHECKSUM_VERIFY=false
             ;;
         --customize-cloudinit|--customize-cloudinit=true)
             CUSTOMIZE_CLOUDINIT=true
@@ -1199,6 +1211,11 @@ fi
 # Add customize-cloudinit flag if enabled (values travel via the PACT_CI_*_B64 env vars)
 if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
     PROXMOX_SCRIPT_ARGS+=("--customize-cloudinit")
+fi
+
+# Image checksum verification is on by default in proxmox.sh; only pass the opt-out.
+if [ "$SKIP_CHECKSUM_VERIFY" = true ]; then
+    PROXMOX_SCRIPT_ARGS+=("--skip-checksum-verify")
 fi
 
 # Add build list to arguments
