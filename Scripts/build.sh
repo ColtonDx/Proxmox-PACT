@@ -42,7 +42,9 @@
 #   --ssh-private-key-path=PATH   Path to SSH private key for authentication
 #   --proxmox-storage=POOL         Proxmox storage pool name (default: local-lvm)
 #   --build-distros=LIST               Comma-separated list of distros to build (e.g., debian12,ubuntu2404)
-#                                  Also accepts: all, debian, ubuntu
+#                                  Also accepts: all, debian, ubuntu, fedora
+#                                  Pre-staged distros (e.g. ubuntu2610) are excluded from
+#                                  'all' and from groups; name one explicitly to build it
 #   --answerfile-path=PATH              Path to custom answerfile (.env.local used by default if exists)
 #   --custom-packerfile=PATH       Path to custom Packer template file
 #   --custom-ansible-playbook=PATH     Path to custom Ansible playbook for Packer
@@ -250,24 +252,68 @@ if [ "${#DISTRO_IDS[@]}" -eq 0 ]; then
     exit 1
 fi
 
+# Pre-staged distros are wired up ahead of their upstream release (image not published
+# yet), so they stay out of "all" and out of family groups until promoted. Read the list
+# from proxmox.sh for the same reason the metadata is read from there - one source of
+# truth. An empty or missing list simply means nothing is pre-staged.
+declare -a STAGED_DISTRO_IDS=()
+_staged_line="$(grep -E '^declare -a STAGED_DISTRO_IDS=\(' "$SCRIPT_DIR/proxmox.sh" | head -1)"
+if [[ "$_staged_line" =~ \((.*)\) ]]; then
+    read -r -a STAGED_DISTRO_IDS <<< "${BASH_REMATCH[1]//\"/}"
+fi
+
+# True when the given distro id is pre-staged.
+is_staged() {
+    local candidate="$1" staged
+    for staged in ${STAGED_DISTRO_IDS[@]+"${STAGED_DISTRO_IDS[@]}"}; do
+        [ "$staged" = "$candidate" ] && return 0
+    done
+    return 1
+}
+
+# The released distro ids - i.e. everything "all" and the family groups resolve to.
+declare -a RELEASED_DISTRO_IDS=()
+for _id in "${DISTRO_IDS[@]}"; do
+    is_staged "$_id" || RELEASED_DISTRO_IDS+=("$_id")
+done
+
 # Expand a build spec into concrete distro ids. Accepts "all", individual ids, or a
-# group prefix (e.g. "debian" -> debian11/12/13). Prints the de-duped id list and
-# returns 0; on an unknown token prints an error and returns 1.
+# group prefix (e.g. "debian" -> debian11/12/13). "all" and group prefixes resolve to
+# released distros only; a pre-staged distro is selected only by its exact id. Prints the
+# de-duped id list and returns 0; on an unknown token prints an error and returns 1.
 expand_selected() {
-    local spec="$1" token id out="" bad=""
+    local spec="$1" token id out="" bad="" staged_token=""
     if [ -z "$spec" ] || [ "$spec" = "all" ]; then
-        echo "${DISTRO_IDS[*]}"
+        echo "${RELEASED_DISTRO_IDS[*]}"
         return 0
     fi
     for token in ${spec//,/ }; do
-        local matched=false
+        local matched=false staged_only=false
         for id in "${DISTRO_IDS[@]}"; do
-            if [ "$id" = "$token" ] || [[ "$id" == "$token"* ]]; then
+            if [ "$id" = "$token" ]; then
+                # An exact id opts in, pre-staged or not.
                 out="$out $id"; matched=true
+            elif [[ "$id" == "$token"* ]]; then
+                if is_staged "$id"; then
+                    staged_only=true
+                else
+                    out="$out $id"; matched=true
+                fi
             fi
         done
-        [ "$matched" = false ] && bad="$bad $token"
+        if [ "$matched" = false ]; then
+            if [ "$staged_only" = true ]; then
+                staged_token="$staged_token $token"
+            else
+                bad="$bad $token"
+            fi
+        fi
     done
+    if [ -n "$staged_token" ]; then
+        echo "Error:$staged_token matches only pre-staged distros - name one explicitly to build it." >&2
+        echo "Pre-staged: ${STAGED_DISTRO_IDS[*]}" >&2
+        return 1
+    fi
     if [ -n "$bad" ]; then
         echo "Error: unknown distro(s):$bad" >&2
         echo "Valid: all, a group (debian/ubuntu/fedora), or one of: ${DISTRO_IDS[*]}" >&2
@@ -335,6 +381,8 @@ Notes:
   - Without --local, defaults to SSH mode (remote Proxmox).
   - Without --rebuild-templates, existing VMs at target VMIDs are preserved (safer).
   - --build-distros accepts: all, debian, ubuntu, fedora, individual names (debian11, debian12, ubuntu2204, fedora43, etc.)
+  - Pre-staged distros are wired up ahead of their upstream release and are left out of
+    'all' and of the family groups; name one explicitly to build it (--build-distros=ubuntu2610).
   - --custom-packerfile allows using a custom Packer template with --run-packer.
   - --customize-cloudinit requires at least one of --cloudinit-user, --cloudinit-password,
     --cloudinit-ssh-keys, or --cloudinit-ssh-key-file.
@@ -527,7 +575,10 @@ if [ "$INTERACTIVE_MODE" = true ]; then
 
     # Q1: Ask which images to build
     echo "Select distros to create templates from:"
-    echo "  Available: all, debian, ubuntu, fedora, ${DISTRO_IDS[*]}"
+    echo "  Available: all, debian, ubuntu, fedora, ${RELEASED_DISTRO_IDS[*]}"
+    if [ "${#STAGED_DISTRO_IDS[@]}" -gt 0 ]; then
+        echo "  Pre-staged (not in 'all' - upstream image may not exist yet): ${STAGED_DISTRO_IDS[*]}"
+    fi
 
     # Keep asking until valid input is provided
     BUILD_VALID=false
@@ -801,10 +852,12 @@ if [ "$DRY_RUN" = true ]; then
     for distro_id in "${DISTRO_IDS[@]}"; do
         [[ " $SELECTED_DISTROS " == *" $distro_id "* ]] || continue
         offset="${DISTRO_OFFSET[$distro_id]}"
+        staged_note=""
+        is_staged "$distro_id" && staged_note="  [pre-staged - upstream image may not be published yet]"
         if [ "$RUN_PACKER" = true ]; then
-            echo "  ${DISTRO_NAME[$distro_id]}: base $((VMID_BASE + offset)) -> Packer $((VMID_BASE + 100 + offset))"
+            echo "  ${DISTRO_NAME[$distro_id]}: base $((VMID_BASE + offset)) -> Packer $((VMID_BASE + 100 + offset))${staged_note}"
         else
-            echo "  ${DISTRO_NAME[$distro_id]}: $((VMID_BASE + offset))"
+            echo "  ${DISTRO_NAME[$distro_id]}: $((VMID_BASE + offset))${staged_note}"
         fi
     done
     if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then

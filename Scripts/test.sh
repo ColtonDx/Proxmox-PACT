@@ -36,6 +36,8 @@
 # Common options (see --help for the full list):
 #   --vmid-base=NUM        Base VMID for the test range (default: 88000)
 #   --build-distros=LIST   Distros to test (default: all). e.g. debian12,ubuntu2404
+#                          Pre-staged distros (see STAGED_DISTRO_IDS in proxmox.sh) are
+#                          left out of 'all'; name one explicitly to test it.
 #   --mode=MODE            variable | answerfile | both (default: both)
 #   --run-packer           Also build & boot-test Packer-customized templates
 #   --boot-timeout=SEC     Seconds to wait for the guest agent (default: 300)
@@ -195,6 +197,8 @@ pve_exec() {
 declare -a DISTRO_IDS=()
 declare -A DISTRO_OFFSET=()
 declare -A DISTRO_NAME=()
+declare -a STAGED_DISTRO_IDS=()
+declare -a RELEASED_DISTRO_IDS=()
 
 parse_distro_metadata() {
     local src="$REPO_ROOT/Scripts/proxmox.sh"
@@ -217,25 +221,61 @@ parse_distro_metadata() {
         echo "Error: parsed zero distros from $src" >&2
         exit 1
     fi
+
+    # Pre-staged distros (wired up ahead of their upstream release) live in their own list
+    # in proxmox.sh. They are excluded from "all" and from group matches here too, so a
+    # default test run never fails on an image that is not published yet.
+    local staged_line
+    staged_line="$(grep -E '^declare -a STAGED_DISTRO_IDS=\(' "$src" | head -1)"
+    if [[ "$staged_line" =~ \((.*)\) ]]; then
+        read -r -a STAGED_DISTRO_IDS <<< "${BASH_REMATCH[1]//\"/}"
+    fi
+    for id in "${DISTRO_IDS[@]}"; do
+        is_staged "$id" || RELEASED_DISTRO_IDS+=("$id")
+    done
+}
+
+# True when the given distro id is pre-staged (see STAGED_DISTRO_IDS in proxmox.sh).
+is_staged() {
+    local candidate="$1" staged
+    for staged in ${STAGED_DISTRO_IDS[@]+"${STAGED_DISTRO_IDS[@]}"}; do
+        [ "$staged" = "$candidate" ] && return 0
+    done
+    return 1
 }
 
 # Expand a BUILD_DISTROS list (groups like "debian"/prefixes, individual ids, or
-# "all") into the concrete distro ids. Echoes a space-separated, de-duped list.
+# "all") into the concrete distro ids. "all" and group prefixes resolve to released
+# distros only; a pre-staged distro is selected only by its exact id. Echoes a
+# space-separated, de-duped list.
 expand_selected() {
     local spec="$1" token id out=""
     if [ -z "$spec" ] || [ "$spec" = "all" ]; then
-        echo "${DISTRO_IDS[*]}"
+        echo "${RELEASED_DISTRO_IDS[*]}"
         return
     fi
     for token in ${spec//,/ }; do
-        local matched=false
+        local matched=false staged_only=false
         for id in "${DISTRO_IDS[@]}"; do
-            # Exact id, or a group/prefix match (e.g. "debian" -> debian11/12/13)
-            if [ "$id" = "$token" ] || [[ "$id" == "$token"* ]]; then
+            if [ "$id" = "$token" ]; then
+                # An exact id opts in, pre-staged or not.
                 out="$out $id"; matched=true
+            elif [[ "$id" == "$token"* ]]; then
+                # A group/prefix match (e.g. "debian" -> debian11/12/13) skips pre-staged.
+                if is_staged "$id"; then
+                    staged_only=true
+                else
+                    out="$out $id"; matched=true
+                fi
             fi
         done
-        [ "$matched" = false ] && echo "Warning: unknown distro '$token' - ignoring" >&2
+        if [ "$matched" = false ]; then
+            if [ "$staged_only" = true ]; then
+                echo "Warning: '$token' matches only pre-staged distros (${STAGED_DISTRO_IDS[*]}) - name one explicitly to test it. Ignoring." >&2
+            else
+                echo "Warning: unknown distro '$token' - ignoring" >&2
+            fi
+        fi
     done
     echo "$out" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs
 }

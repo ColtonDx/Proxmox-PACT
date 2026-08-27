@@ -43,6 +43,10 @@ Valid values: `all`, a family (`debian`, `ubuntu`, `fedora`), or a
 comma-separated list of `debian11 debian12 debian13 ubuntu2204 ubuntu2404
 ubuntu2604 fedora43 fedora44`.
 
+`ubuntu2610` (Ubuntu 26.10, due October 2026) is pre-staged: it is wired up but
+left out of `all` and of the `ubuntu` family, so name it explicitly to build it.
+Until the release lands upstream, the image download will fail.
+
 ## Packer customization
 
 ```bash

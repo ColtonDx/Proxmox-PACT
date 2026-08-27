@@ -105,6 +105,25 @@ Copy-paste configs, one-liners, answerfiles, and a sample playbook live in
 VMIDs are `base + offset` (default base `800`). With Packer, customized
 templates get `base + 100 + offset` (e.g. Debian 12 → 902).
 
+### Pre-staged
+
+| Distro | Base VMID | Available |
+|--------|----------:|-----------|
+| Ubuntu 26.10 | 815 | October 2026 |
+
+Pre-staged distros are fully wired up — metadata, VMID, Packer template, docs — ahead
+of their upstream release. They are deliberately left out of `all` and out of the family
+groups (`--build-distros=ubuntu` does *not* include them), so a normal build never
+reaches for an image that isn't published yet. To build one, name it explicitly:
+
+```bash
+./Scripts/build.sh --proxmox-host=pve.local --build-distros=ubuntu2610
+```
+
+Before release day that download will fail with a 404 — that's expected, and the build
+warns you up front. On release day, removing the id from `STAGED_DISTRO_IDS` in
+`Scripts/proxmox.sh` is the only code change needed to promote it to a regular distro.
+
 ## Testing
 
 `Scripts/test.sh` builds every selected image in an isolated 88xxx VMID range,

@@ -31,13 +31,19 @@
 # (base64-encoded so arbitrary content survives the SSH command line intact).
 #
 # Distro Options:
-#   Individual: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora43, fedora44
+#   Individual: debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604,
+#               ubuntu2610 (pre-staged), fedora43, fedora44
 #   Groups:     debian (all Debian versions), ubuntu (all Ubuntu versions), fedora (all Fedora versions)
-#   Special:    all (create all distros)
+#   Special:    all (create every released distro)
+#
+#   Pre-staged distros are wired up ahead of their upstream release. They are left out of
+#   "all" and of the family groups so a normal build never reaches for an image that is
+#   not published yet; name one explicitly (--build=ubuntu2610) to opt in. See
+#   STAGED_DISTRO_IDS below.
 #
 # VMIDs Assignment (with default VMID_BASE=800):
 #   debian11: 801,   debian12: 802,   debian13: 803
-#   ubuntu2204: 811, ubuntu2404: 812, ubuntu2604: 814
+#   ubuntu2204: 811, ubuntu2404: 812, ubuntu2604: 814, ubuntu2610: 815
 #   fedora43: 823,   fedora44: 824
 #
 # If Packer is enabled (--run-packer), customized VMs get base+100 offset
@@ -69,6 +75,7 @@ declare -a DISTRO_METADATA=(
     "ubuntu2204|Ubuntu-2204|11|ubuntu-2204-template.img|https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"
     "ubuntu2404|Ubuntu-2404|12|ubuntu-2404-template.img|https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
     "ubuntu2604|Ubuntu-2604|14|ubuntu-2604-template.img|https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img"
+    "ubuntu2610|Ubuntu-2610|15|ubuntu-2610-template.img|https://cloud-images.ubuntu.com/releases/26.10/release/ubuntu-26.10-server-cloudimg-amd64.img"
     "fedora43|Fedora-43|23|fedora-43-template.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2"
     "fedora44|Fedora-44|24|fedora-44-template.qcow2|https://fedora.mirror.constant.com/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
 )
@@ -79,6 +86,34 @@ for _entry in "${DISTRO_METADATA[@]}"; do
     DISTRO_IDS+=("${_entry%%|*}")
 done
 
+# Distros wired up ahead of their upstream release. Their metadata row above is complete
+# and correct, but the image it points at is not published yet, so they are excluded from
+# "all" and from family-group matches ("ubuntu"); naming one explicitly opts in.
+#   ubuntu2610 - Ubuntu 26.10, due October 2026
+# build.sh and test.sh read this list from here, so it stays a single source of truth.
+# On release day, deleting the id from this list is the only functional change needed to
+# promote it; the docs that call it out by name (README, .env.local.sample,
+# examples/commands.md, and the --help notes in build.sh) want refreshing at the same time.
+declare -a STAGED_DISTRO_IDS=("ubuntu2610")
+
+# True when the given distro id is pre-staged (see STAGED_DISTRO_IDS above).
+is_staged() {
+    local candidate="$1" staged
+    for staged in "${STAGED_DISTRO_IDS[@]}"; do
+        [ "$staged" = "$candidate" ] && return 0
+    done
+    return 1
+}
+
+# Rendered into --help only when something is pre-staged, so the section disappears by
+# itself once every distro has been promoted.
+_staged_usage=""
+if [ "${#STAGED_DISTRO_IDS[@]}" -gt 0 ]; then
+    _staged_usage="
+                      Pre-staged (not in 'all' or a group; name it to opt in):
+                        ${STAGED_DISTRO_IDS[*]}"
+fi
+
 print_usage() {
         cat <<EOF
 Usage: $0 [--vmid-base=800] [--proxmox-storage=local-lvm] [--build=LIST] [--rebuild-templates] [--run-packer]
@@ -87,10 +122,11 @@ Options:
     --vmid-base=NUM        Base VMID to use. Defaults to ${DEFAULT_VMID_BASE}.
     --proxmox-storage=NAME Storage pool to use. Defaults to ${DEFAULT_PROXMOX_STORAGE}.
     --build=LIST      Comma-separated list of distros to build. Special values:
-                        all      - build every distro (default)
+                        all      - build every released distro (default)
                         debian   - debian11, debian12, debian13
                         ubuntu   - ubuntu2204, ubuntu2404, ubuntu2604
-                      Individual names: ${DISTRO_IDS[*]}
+                        fedora   - fedora43, fedora44
+                      Individual names: ${DISTRO_IDS[*]}${_staged_usage}
     --rebuild-templates     Delete existing VMs at target VMIDs before building (destructive).
                       Without this flag, existing VMs are preserved.
     --run-packer      Packer will be used for customization. Checks both base and packer VMIDs.
@@ -156,26 +192,52 @@ if [ "$CUSTOMIZE_CLOUDINIT" = true ] && [ -n "$CLOUDINIT_PASSWORD" ]; then
     echo "Warning: Cloud-Init default password will be stored in PLAINTEXT in each VM's Proxmox config (qm config <vmid>). Prefer SSH keys where possible." >&2
 fi
 
-# Parse the build list into SELECTED_DISTROS. "all"/empty selects everything; a group
-# prefix (debian/ubuntu/fedora) selects its members; otherwise an individual id is matched.
-# Unknown items are warned about and ignored.
+# Parse the build list into SELECTED_DISTROS. "all"/empty selects every released distro; a
+# group prefix (debian/ubuntu/fedora) selects its released members; otherwise an individual
+# id is matched. An exact id is the only way to select a pre-staged distro. Unknown items
+# are warned about and ignored.
 SELECTED_DISTROS=""
 if [ -z "${BUILD_DISTROS}" ] || [ "${BUILD_DISTROS}" = "all" ]; then
-    SELECTED_DISTROS="${DISTRO_IDS[*]}"
+    for id in "${DISTRO_IDS[@]}"; do
+        is_staged "$id" || SELECTED_DISTROS="${SELECTED_DISTROS} $id"
+    done
 else
     for item in $(echo "$BUILD_DISTROS" | tr ',' ' '); do
         matched=false
+        staged_only=false
         for id in "${DISTRO_IDS[@]}"; do
-            if [ "$id" = "$item" ] || [[ "$id" == "$item"* ]]; then
+            if [ "$id" = "$item" ]; then
+                # An exact id opts in, pre-staged or not.
                 SELECTED_DISTROS="${SELECTED_DISTROS} $id"; matched=true
+            elif [[ "$id" == "$item"* ]]; then
+                # A group/prefix match never drags in a pre-staged distro.
+                if is_staged "$id"; then
+                    staged_only=true
+                else
+                    SELECTED_DISTROS="${SELECTED_DISTROS} $id"; matched=true
+                fi
             fi
         done
-        [ "$matched" = false ] && echo "Warning: unknown build item '$item' - ignoring" >&2
+        if [ "$matched" = false ]; then
+            if [ "$staged_only" = true ]; then
+                echo "Warning: '$item' only matches pre-staged distros (${STAGED_DISTRO_IDS[*]}) - name one explicitly to build it. Ignoring." >&2
+            else
+                echo "Warning: unknown build item '$item' - ignoring" >&2
+            fi
+        fi
     done
 fi
 
 # Remove duplicates and normalize spacing
 SELECTED_DISTROS="$(echo "$SELECTED_DISTROS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)"
+
+# A pre-staged distro was asked for by name: build it, but say plainly that the image may
+# not exist yet, so a 404 here reads as "not released" rather than a broken script.
+for id in $SELECTED_DISTROS; do
+    if is_staged "$id"; then
+        echo "Warning: $id is pre-staged - its cloud image may not be published upstream yet, in which case the download below will fail." >&2
+    fi
+done
 
 echo "Using VMID_BASE=${VMID_BASE}, storage=${PROXMOX_STORAGE}, build='${BUILD_DISTROS}', selected='${SELECTED_DISTROS}', rebuild-templates=${REBUILD_TEMPLATES}, run-packer=${RUN_PACKER}, customize-cloudinit=${CUSTOMIZE_CLOUDINIT}"
 
