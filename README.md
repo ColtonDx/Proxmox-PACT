@@ -96,6 +96,21 @@ logs stay clean.
 
 Full flag list and answerfile settings: **[CLI Reference](../../wiki/CLI-Reference)**.
 
+## Image verification
+
+Every cloud image is checked against the checksum its distro publishes before anything
+else happens to it — the verification runs *before* `virt-customize` touches the image
+and before it is imported into Proxmox storage, so a corrupt or tampered download can
+never become a template. On a mismatch the build stops and the image is deleted.
+
+This is on by default and needs no configuration. PACT tracks the checksum file for each
+distro alongside its image URL and handles the three published formats (Debian
+`SHA512SUMS`, Ubuntu `SHA256SUMS`, Fedora `*-CHECKSUM`).
+
+If a mirror's checksum file is temporarily unreachable and you need to build anyway,
+`--skip-checksum-verify` (or `SKIP_CHECKSUM_VERIFY=true`) opts out for that run and logs
+a warning. Only reach for it when you have to.
+
 ## Cloud-Init customization
 
 By default, templates ship with an empty Cloud-Init drive — you set the username,
@@ -117,6 +132,29 @@ distro you build) and can be combined with any of the standard config methods: C
 flags, `PACT_CUSTOMIZE_CLOUDINIT` / `PACT_CLOUDINIT_*` env vars, or the `.env.local`
 answerfile.
 
+### Don't have an SSH key yet?
+
+When prompted for the SSH key, the first option generates one for you:
+
+```
+  SSH public key for the Cloud-Init user:
+    1) Generate a new key pair for me
+    2) Read one from a file (use this for multiple keys)
+    3) Paste a single key
+    4) Skip - don't set an SSH key
+```
+
+Option 1 creates an ed25519 pair (default `~/.ssh/pact-<timestamp>`, no passphrase, so
+first login is unattended) and injects the public half into every template it builds. It
+will not overwrite an existing file. You can also ask for a **PuTTY `.ppk`** for
+PuTTY/WinSCP on Windows — needs `puttygen` (`putty-tools`), which it offers to install,
+and produces a PPK v3 file readable by PuTTY 0.75 and newer.
+
+When the build finishes, the key paths are printed last, along with the exact `ssh -i`
+command to log in. You can optionally have the private key itself printed to the
+terminal — handy when you're building on a remote box, but it does leave the key in your
+scrollback, so it's off by default.
+
 ## Examples
 
 Copy-paste configs, one-liners, answerfiles, and a sample playbook live in
@@ -130,13 +168,18 @@ Copy-paste configs, one-liners, answerfiles, and a sample playbook live in
 
 | Distro | Base VMID | Distro | Base VMID |
 |--------|----------:|--------|----------:|
-| Debian 11 | 801 | Ubuntu 24.04 | 812 |
 | Debian 12 | 802 | Ubuntu 26.04 | 814 |
 | Debian 13 | 803 | Fedora 43 | 823 |
 | Ubuntu 22.04 | 811 | Fedora 44 | 824 |
+| Ubuntu 24.04 | 812 | | |
 
 VMIDs are `base + offset` (default base `800`). With Packer, customized
 templates get `base + 100 + offset` (e.g. Debian 12 → 902).
+
+> Debian 11 was removed ahead of its end of life on 31 August 2026. VMID 801 is
+> now unused; every other VMID is unchanged, so existing templates keep their IDs.
+> If you have `debian11` in an answerfile or `--build-distros`, drop it — the
+> build will otherwise stop with an unknown-distro error.
 
 ## Testing
 

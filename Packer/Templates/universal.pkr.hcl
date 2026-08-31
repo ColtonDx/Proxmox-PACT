@@ -3,7 +3,7 @@
 #
 # This Packer template can build images for multiple distributions by passing
 # the 'distro' variable. Supported distros:
-#   - debian11, debian12, debian13
+#   - debian12, debian13
 #   - ubuntu2204, ubuntu2404, ubuntu2604
 #   - fedora43, fedora44
 #
@@ -15,11 +15,15 @@
 packer {
   required_plugins {
     proxmox = {
-      version = ">= 1.2.2"
+      version = ">= 1.2.4"
       source  = "github.com/hashicorp/proxmox"
     }
     ansible = {
-      version = ">= 1.0.0, < 1.1.4"
+      # The old "< 1.1.4" ceiling existed because 1.1.4 stopped attaching binaries to
+      # GitHub Releases, which the pinned Packer 1.11.2 still fetched from. Packer 1.16
+      # resolves plugins from the HashiCorp release site, so the ceiling is no longer
+      # needed - and lifting it picks up the x/crypto and x/net security bumps in 1.1.5+.
+      version = ">= 1.1.6"
       source  = "github.com/hashicorp/ansible"
     }
   }
@@ -60,7 +64,7 @@ variable "vmid" {
 
 variable "distro" {
   type        = string
-  description = "Distribution to build (debian11, debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora43, fedora44)"
+  description = "Distribution to build (debian12, debian13, ubuntu2204, ubuntu2404, ubuntu2604, fedora43, fedora44)"
 }
 
 variable "ansible_playbook" {
@@ -78,10 +82,6 @@ variable "ansible_varfile" {
 # Locals for distro-specific configuration
 locals {
   distro_config = {
-    debian11 = {
-      template_name = "Template-Debian-11"
-      vm_name       = "PACT-Debian-11"
-    }
     debian12 = {
       template_name = "Template-Debian-12"
       vm_name       = "PACT-Debian-12"

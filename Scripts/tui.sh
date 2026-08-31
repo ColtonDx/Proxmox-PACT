@@ -277,8 +277,20 @@ penguin_help_text() {
         cloudinit_password)
             echo "A default password for that account. Be aware: Proxmox stores this in the VM's config in plaintext, so anyone who can run 'qm config' on the host can read it. An SSH key is the safer choice and you can leave this blank entirely. A password is mainly useful if you need console access to a VM that has no network yet."
             ;;
+        cloudinit_sshkey_menu)
+            echo "Your SSH public key gets installed for the default user, so you can log in without a password - the recommended way to reach your VMs. Option 1 creates a brand new ed25519 key pair for you, which is the easiest start if you do not already have one. Option 2 reads a file, and is the one to use for multiple keys - point it at ~/.ssh/authorized_keys or a single ~/.ssh/id_ed25519.pub. Option 3 lets you paste one key directly. Option 4 skips the key entirely, leaving you to set it per-VM from the Proxmox UI."
+            ;;
         cloudinit_sshkey)
-            echo "Your SSH public key gets installed for the default user, so you can log in without a password. Give a file path if you keep several keys in one file - the usual one is ~/.ssh/authorized_keys, or ~/.ssh/id_ed25519.pub for a single key. Leave the path blank and you can paste one key directly instead. This is the recommended way to get into your VMs."
+            echo "Your SSH public key gets installed for the default user, so you can log in without a password. Give a file path if you keep several keys in one file - the usual one is ~/.ssh/authorized_keys, or ~/.ssh/id_ed25519.pub for a single key. This is the recommended way to get into your VMs."
+            ;;
+        ssh_keygen_path)
+            echo "Where the new key pair is written. The default lands in your ~/.ssh with a timestamped name, so it will not collide with keys you already have. Two files are created: the path you give is the private key, and the same name with .pub is the public half that gets baked into the templates. PACT refuses to overwrite an existing file, so pick a fresh name if it complains."
+            ;;
+        ssh_keygen_ppk)
+            echo "PuTTY and WinSCP on Windows do not read OpenSSH private keys directly - they want a .ppk file. Answer Yes and PACT converts the new key for you with puttygen, installing putty-tools first if it is missing. Answer No if you connect from Linux or macOS, or from Windows using OpenSSH or WSL, where the plain private key already works."
+            ;;
+        ssh_keygen_print)
+            echo "Prints the private key text to this terminal when the build finishes, so you can copy it into a password manager or onto another machine. The key is already saved to disk either way, so answer No unless you need to copy it somewhere - anything printed here can linger in your scrollback, terminal logs, or a recorded session."
             ;;
         packer)
             echo "Packer plus Ansible take the plain templates you just built and customize them - installing packages, applying settings, and generalizing the image. It leaves the plain templates alone and produces a second set at VMID plus 100, so Debian 12 at 802 gains a customized twin at 902. It needs a Proxmox API token and adds real time to the build. Answer No for plain templates, which is all you need if you configure VMs after cloning."
