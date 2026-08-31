@@ -33,6 +33,38 @@ Use `bash <(curl …)`, not `curl … | bash`, so the prompts work. You can run 
 any Linux machine or directly on the Proxmox host — SSH vs. local is handled
 automatically.
 
+## The guided installer
+
+Interactive mode is a guided, step-by-step interview in your terminal. Every
+question shows its default in `[brackets]` — press Enter to take it.
+
+**Stuck on a question? Answer `?` and a penguin explains it:**
+
+```
+  Base VMID [800]  [? for help]
+  > ?
+
+            ╭──────────────────────────────────────────────────────────────╮
+   .--.     │ Every VM in Proxmox has a numeric ID, and PACT assigns them  │
+  |o_o |    │ by adding a fixed offset to this base. With the default base │
+  |:_/ |    │ of 800 you get Debian 12 at 802 and Ubuntu 24.04 at 811.     │
+ //   \ \   │ Change it if 800-830 is already occupied on your cluster —   │
+(|     | )  │ pick a free block, for example 700 or 900. It must be a      │
+/'\_   _/`\ │ plain number and needs enough room above it for every        │
+\___)=(___/ │ distro you selected.                                         │
+            ╰──────────────────────────────────────────────────────────────╯
+```
+
+The penguin covers every prompt — distro selection, Cloud-Init, VMIDs, SSH,
+storage pools, API tokens, and custom playbooks — so you never have to leave
+the installer to look something up. The explanations live in
+[`Scripts/tui.sh`](Scripts/tui.sh).
+
+Prefer it plain? `--no-tui` (or `PACT_NO_TUI=1`, or `NO_COLOR`) drops the colors,
+boxes, and penguin while keeping the same questions and the same `?` help. The
+decoration is also skipped automatically when output is not a terminal, so piped
+logs stay clean.
+
 ## How it works
 
 1. **`build.sh`** (your machine or the Proxmox host) collects settings from CLI
@@ -50,7 +82,8 @@ automatically.
 
 | Common flag | Meaning |
 |-------------|---------|
-| `--interactive` | Prompt for everything (can't be mixed with other flags) |
+| `--interactive` | Guided interview; answer `?` at any prompt for an explanation |
+| `--no-tui` | Plain prompts — no colors, boxes, or penguin (may accompany `--interactive`) |
 | `--local` | Run on the Proxmox host, no SSH |
 | `--proxmox-host=HOST` | Proxmox hostname or IP (default `pve.local`) |
 | `--proxmox-ssh-user=USER` | SSH user (default `root`) |
