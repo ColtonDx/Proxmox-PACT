@@ -6,7 +6,8 @@
 # This script orchestrates the complete build process for creating Proxmox VM
 # templates and customizing them with Packer. It supports three configuration modes:
 #
-#  - Interactive mode: Prompts user for all settings
+#  - Interactive mode: Guided TUI that prompts for all settings. Answer "?" at
+#    any prompt and an ASCII penguin explains that option (see Scripts/tui.sh).
 #  - CLI arguments: Pass settings directly (--proxmox-host=, --build-distros=, etc.)
 #  - Answerfile: Load from .env.local configuration file
 #
@@ -27,7 +28,8 @@
 # Usage: ./build.sh [OPTIONS]
 #
 # Configuration modes (choose one):
-#   ./build.sh --interactive       Prompts for all settings interactively
+#   ./build.sh --interactive       Guided TUI; "?" at any prompt explains it
+#   ./build.sh --interactive --no-tui   Same questions, plain text, no penguin
 #   ./build.sh [CLI arguments]     Use command-line arguments directly
 #   ./build.sh                     Load from .env.local (if exists), then prompts missing values
 #   ./build.sh --answerfile-path=FILE   Load from custom answerfile, then prompts missing values
@@ -49,6 +51,7 @@
 #   --custom-ansible-varfile=PATH  Path to custom variables file for Ansible in Packer
 #   --packer-token-id=TOKEN        Proxmox API Token ID for Packer
 #   --packer-token-secret=SEC      Proxmox API Token Secret for Packer
+#   --skip-checksum-verify         Skip verifying downloaded images against published checksums
 #   --customize-cloudinit          Bake Cloud-Init defaults (username/password/SSH key) into templates
 #   --cloudinit-user=USER          Cloud-Init default username (requires --customize-cloudinit)
 #   --cloudinit-password=PASS      Cloud-Init default password (plaintext in the VM config; SSH keys are safer)
@@ -73,6 +76,7 @@
 #   CUSTOM_PACKERFILE              Custom Packer template path (optional)
 #   CUSTOM_ANSIBLE_PLAYBOOK        Custom Ansible playbook for Packer (optional)
 #   CUSTOM_ANSIBLE_VARFILE         Custom Ansible variables file for Packer (optional)
+#   SKIP_CHECKSUM_VERIFY           Skip image checksum verification (true/false, default: false)
 #   CUSTOMIZE_CLOUDINIT            Bake Cloud-Init defaults into templates (true/false, default: false)
 #   CLOUDINIT_USER                 Cloud-Init default username (optional, requires CUSTOMIZE_CLOUDINIT=true)
 #   CLOUDINIT_PASSWORD             Cloud-Init default password (optional; stored in plaintext by Proxmox)
@@ -94,11 +98,11 @@ PACT_ARGC=$#
 # Directory containing this script (empty when curl-piped via process substitution).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
 
-# Base URL for fetching companion files (proxmox.sh, the Packer template, the Ansible
-# files) when build.sh is run standalone (curl-piped) instead of from a clone. PACT_REF
-# defaults to main; the README bootstrap one-liner overrides it to the current branch
-# until this is merged. Both are overridable via the environment.
-PACT_REF="${PACT_REF:-main}"
+# Base URL for fetching companion files (proxmox.sh, tui.sh, the Packer template, the
+# Ansible files) when build.sh is run standalone (curl-piped) instead of from a clone.
+# PACT_REF points at this branch until it merges, because Scripts/tui.sh does not exist
+# on main yet; set it back to main once merged. Both are overridable via the environment.
+PACT_REF="${PACT_REF:-feature/tui-guided-installer}"
 PACT_BASE_URL="${PACT_BASE_URL:-https://raw.githubusercontent.com/ColtonDx/Proxmox-PACT/$PACT_REF}"
 
 # Cleanup for URL-download temp files and the bootstrap working tree (single EXIT trap;
@@ -125,6 +129,7 @@ else
              "$PACT_BOOTSTRAP_DIR/Ansible/Playbooks" \
              "$PACT_BOOTSTRAP_DIR/Ansible/Variables"
     for _f in Scripts/proxmox.sh \
+              Scripts/tui.sh \
               Packer/Templates/universal.pkr.hcl \
               Ansible/Playbooks/image_customizations.yml \
               Ansible/Variables/vars.yml; do
@@ -140,6 +145,17 @@ fi
 # Repository root (parent of the Scripts dir). Companion files are resolved by absolute path
 # from here so build.sh works no matter what directory it is invoked from.
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# TUI helpers (box chrome, step headers, and the "?"-aware ask/ask_secret/ask_yesno
+# prompts backed by the explaining penguin). Sourced for every run because the
+# gap-fill prompts further down use them too, not just full --interactive mode.
+# shellcheck source=Scripts/tui.sh
+if [ -f "$SCRIPT_DIR/tui.sh" ]; then
+    source "$SCRIPT_DIR/tui.sh"
+else
+    echo "Error: could not find $SCRIPT_DIR/tui.sh" >&2
+    exit 1
+fi
 
 #####################################################################################
 ################### CLI OPTION PARSING
@@ -168,11 +184,18 @@ BUILD_DISTROS=""
 PACKER_TOKEN_ID=""
 PACKER_TOKEN_SECRET=""
 ANSWERFILE_PATH=""
+SKIP_CHECKSUM_VERIFY=false
 CUSTOMIZE_CLOUDINIT=false
 CLOUDINIT_USER=""
 CLOUDINIT_PASSWORD=""
 CLOUDINIT_SSH_KEYS=""
 CLOUDINIT_SSH_KEY_FILE=""
+# Set only when interactive setup generates a key pair for the user (see generate_ssh_key).
+# The paths are reported after the build so they aren't buried under the build output.
+GENERATED_KEY_PATH=""
+GENERATED_PPK_PATH=""
+WANT_PPK=false
+PRINT_PRIVATE_KEY=false
 
 #####################################################################################
 # LOAD ANSWERFILE (.env.local by default, or --answerfile-path / PACT_ANSWERFILE_PATH)
@@ -224,6 +247,7 @@ fi
 [ -n "${PACT_PROXMOX_STORAGE:-}" ] && PROXMOX_STORAGE="${PACT_PROXMOX_STORAGE}"
 [ -n "${PACT_PROXMOX_TARGET_NODE:-}" ] && PROXMOX_TARGET_NODE="${PACT_PROXMOX_TARGET_NODE}"
 [ -n "${PACT_VMID_BASE:-}" ] && VMID_BASE="${PACT_VMID_BASE}"
+[ -n "${PACT_SKIP_CHECKSUM_VERIFY:-}" ] && SKIP_CHECKSUM_VERIFY="${PACT_SKIP_CHECKSUM_VERIFY}"
 [ -n "${PACT_CUSTOMIZE_CLOUDINIT:-}" ] && CUSTOMIZE_CLOUDINIT="${PACT_CUSTOMIZE_CLOUDINIT}"
 [ -n "${PACT_CLOUDINIT_USER:-}" ] && CLOUDINIT_USER="${PACT_CLOUDINIT_USER}"
 [ -n "${PACT_CLOUDINIT_PASSWORD:-}" ] && CLOUDINIT_PASSWORD="${PACT_CLOUDINIT_PASSWORD}"
@@ -251,7 +275,7 @@ if [ "${#DISTRO_IDS[@]}" -eq 0 ]; then
 fi
 
 # Expand a build spec into concrete distro ids. Accepts "all", individual ids, or a
-# group prefix (e.g. "debian" -> debian11/12/13). Prints the de-duped id list and
+# group prefix (e.g. "debian" -> debian12/13). Prints the de-duped id list and
 # returns 0; on an unknown token prints an error and returns 1.
 expand_selected() {
     local spec="$1" token id out="" bad=""
@@ -279,25 +303,83 @@ expand_selected() {
 # Selected distros to build (space-separated list of distro IDs)
 SELECTED_DISTROS=""
 
+# Generate a fresh SSH key pair for Cloud-Init, for users who don't already have one.
+# On success sets CLOUDINIT_SSH_KEYS to the public key (so it gets baked into the
+# templates like any other key) and records GENERATED_KEY_PATH for the post-build report.
+# Returns 1 without touching CLOUDINIT_SSH_KEYS if the key could not be created, so the
+# caller can re-offer the menu instead of silently continuing with no key.
+generate_ssh_key() {
+    if ! command -v ssh-keygen &>/dev/null; then
+        tui_warn "ssh-keygen not found (install openssh-client). Pick another option."
+        return 1
+    fi
+
+    local default_path key_path=""
+    default_path="$HOME/.ssh/pact-$(date +%Y%m%d-%H%M%S)"
+    ask key_path "Path for the new key" "$default_path" ssh_keygen_path
+    key_path="${key_path/#\~/$HOME}"
+    if [ -e "$key_path" ] || [ -e "$key_path.pub" ]; then
+        tui_warn "$key_path already exists - refusing to overwrite an existing key."
+        return 1
+    fi
+    if ! mkdir -p "$(dirname "$key_path")" 2>/dev/null; then
+        tui_warn "Could not create $(dirname "$key_path")"
+        return 1
+    fi
+
+    # ed25519: supported by every cloud image we build and by PuTTY 0.75+. No passphrase
+    # (-N ""), because the point is an unattended first login to a fresh VM; the private
+    # key lands in the user's ~/.ssh with ssh-keygen's default 0600.
+    if ! ssh-keygen -t ed25519 -N "" -C "proxmox-pact-$(date +%Y%m%d)" -f "$key_path" >/dev/null; then
+        tui_warn "ssh-keygen failed to create $key_path"
+        return 1
+    fi
+
+    CLOUDINIT_SSH_KEYS="$(cat "$key_path.pub")"
+    GENERATED_KEY_PATH="$key_path"
+    tui_ok "Created $key_path and $key_path.pub"
+
+    # The .ppk conversion itself is deferred to report_generated_key(), which runs after
+    # install_pkgs() is defined and so can install putty-tools if it's missing.
+    ask_yesno WANT_PPK "Also create a PuTTY .ppk file (for PuTTY/WinSCP on Windows)?" N ssh_keygen_ppk
+
+    ask_yesno PRINT_PRIVATE_KEY "Print the private key to this terminal when the build finishes?" N ssh_keygen_print
+
+    return 0
+}
+
 # Interactively prompt for optional Cloud-Init defaults, setting CLOUDINIT_USER,
 # CLOUDINIT_PASSWORD, and CLOUDINIT_SSH_KEYS. Shared by full --interactive mode and the
 # non-interactive gap-fill prompt (used when --customize-cloudinit is set with no values).
 prompt_cloudinit_values() {
-    read -p "  Cloud-Init username (blank to leave the image's default user): " -r CLOUDINIT_USER
-    echo "  Warning: a Cloud-Init password is stored in PLAINTEXT in the Proxmox VM config (qm config); SSH keys are safer."
-    read -sp "  Cloud-Init password (blank to skip): " -r CLOUDINIT_PASSWORD
-    echo ""
-    read -p "  SSH public key file path (blank to paste a single key instead; use a file for multiple keys): " -r _ci_keyfile
-    if [ -n "$_ci_keyfile" ]; then
-        _ci_keyfile="${_ci_keyfile/#\~/$HOME}"
-        if [ -f "$_ci_keyfile" ]; then
-            CLOUDINIT_SSH_KEYS="$(cat "$_ci_keyfile")"
-        else
-            echo "  Warning: file not found: $_ci_keyfile - skipping SSH key." >&2
-        fi
-    else
-        read -p "  Paste a single SSH public key (blank to skip): " -r CLOUDINIT_SSH_KEYS
-    fi
+    ask CLOUDINIT_USER "Cloud-Init username (blank keeps the image's default user)" "" cloudinit_user
+
+    tui_warn "A Cloud-Init password is stored in PLAINTEXT in the Proxmox VM config (qm config); SSH keys are safer."
+    ask_secret CLOUDINIT_PASSWORD "Cloud-Init password (blank to skip)" cloudinit_password
+
+    local choice="" keyfile=""
+    while true; do
+        tui_info "SSH public key for the Cloud-Init user:"
+        tui_note "1) Generate a new key pair for me"
+        tui_note "2) Read one from a file (use this for multiple keys)"
+        tui_note "3) Paste a single key"
+        tui_note "4) Skip - don't set an SSH key"
+        ask choice "Choice" "4" cloudinit_sshkey_menu
+        case "${choice:-4}" in
+            1) generate_ssh_key && break ;;
+            2) ask keyfile "SSH public key file path" "" cloudinit_sshkey
+               keyfile="${keyfile/#\~/$HOME}"
+               if [ -f "$keyfile" ]; then
+                   CLOUDINIT_SSH_KEYS="$(cat "$keyfile")"
+                   tui_ok "Loaded SSH key(s) from $keyfile"
+                   break
+               fi
+               tui_warn "File not found: $keyfile" ;;
+            3) ask CLOUDINIT_SSH_KEYS "Paste a single SSH public key" "" cloudinit_sshkey; break ;;
+            4) break ;;
+            *) tui_warn "Please enter 1, 2, 3, or 4." ;;
+        esac
+    done
 }
 
 print_usage() {
@@ -306,6 +388,7 @@ Usage: $0 [OPTIONS]
 
 Options:
   --interactive              Prompt the user for all settings interactively.
+  --no-tui                   Plain prompts: no colors, boxes, or ASCII penguin.
   --run-packer               Run Packer builds for image customization.
   --rebuild-templates             Delete existing VMs before building new ones (destructive).
   --proxmox-host=HOSTNAME    Proxmox hostname or IP address (default: pve.local).
@@ -323,6 +406,8 @@ Options:
   --custom-ansible-varfile=PATH  Path or URL to custom variables file for Ansible playbook (default: ./Ansible/Variables/vars.yml).
   --packer-token-id=TOKEN    Proxmox API Token ID for Packer (required with --run-packer).
   --packer-token-secret=SEC  Proxmox API Token Secret for Packer (required with --run-packer).
+  --skip-checksum-verify     Do not verify downloaded images against the distro's published
+                             checksum (verification is on by default).
   --customize-cloudinit      Bake Cloud-Init defaults (username/password/SSH key) into the templates.
   --cloudinit-user=USER      Cloud-Init default username (with --customize-cloudinit).
   --cloudinit-password=PASS  Cloud-Init default password (plaintext in the VM config; SSH keys are safer).
@@ -334,7 +419,7 @@ Notes:
   - If --interactive is set, no other arguments are allowed (it overrides everything).
   - Without --local, defaults to SSH mode (remote Proxmox).
   - Without --rebuild-templates, existing VMs at target VMIDs are preserved (safer).
-  - --build-distros accepts: all, debian, ubuntu, fedora, individual names (debian11, debian12, ubuntu2204, fedora43, etc.)
+  - --build-distros accepts: all, debian, ubuntu, fedora, individual names (debian12, debian13, ubuntu2204, fedora43, etc.)
   - --custom-packerfile allows using a custom Packer template with --run-packer.
   - --customize-cloudinit requires at least one of --cloudinit-user, --cloudinit-password,
     --cloudinit-ssh-keys, or --cloudinit-ssh-key-file.
@@ -355,6 +440,12 @@ for arg in "$@"; do
             ;;
         --rebuild-templates=false)
             REBUILD_TEMPLATES=false
+            ;;
+        --no-tui)
+            # Drop the box drawing, color, and the penguin; plain prompts only.
+            PACT_TUI_ENABLED=false
+            C_RESET=""; C_BOLD=""; C_DIM=""; C_CYAN=""; C_BLUE=""
+            C_GREEN=""; C_YELLOW=""; C_WHITE=""
             ;;
         --interactive)
             INTERACTIVE_MODE=true
@@ -404,6 +495,12 @@ for arg in "$@"; do
         --packer-token-secret=*)
             PACKER_TOKEN_SECRET="${arg#*=}"
             ;;
+        --skip-checksum-verify|--skip-checksum-verify=true)
+            SKIP_CHECKSUM_VERIFY=true
+            ;;
+        --skip-checksum-verify=false)
+            SKIP_CHECKSUM_VERIFY=false
+            ;;
         --customize-cloudinit|--customize-cloudinit=true)
             CUSTOMIZE_CLOUDINIT=true
             ;;
@@ -440,7 +537,9 @@ if [ "$INTERACTIVE_MODE" = true ]; then
     other_args=false
     for arg in "$@"; do
         case "$arg" in
-            --interactive|--help)
+            --interactive|--help|--no-tui)
+                # --no-tui only changes presentation, not configuration, so it
+                # is allowed alongside --interactive.
                 continue
                 ;;
             *)
@@ -485,10 +584,12 @@ fi
 # mode, or let the user point at an answerfile / custom playbook + varfile.
 #####################################################################################
 if [ "$PACT_ARGC" -eq 0 ] && [ "$INTERACTIVE_MODE" = false ] && [ "$CONFIG_LOADED" = false ] && [ -t 0 ]; then
-    echo ""
-    read -p "No configuration found. Continue in interactive mode? [Y/n]: " -r _gate
-    if [[ "$_gate" =~ ^[Nn]$ ]]; then
-        read -p "  Answerfile path or URL (blank to skip): " -r _af
+    tui_banner
+    # ask_yesno assigns through `printf -v`, so seed the variable first.
+    _gate_yes=false
+    ask_yesno _gate_yes "No configuration found. Continue in interactive mode?" Y interactive_gate
+    if [ "$_gate_yes" = false ]; then
+        ask _af "Answerfile path or URL (blank to skip)" "" answerfile
         if [ -n "$_af" ]; then
             if [[ "$_af" =~ ^https?:// ]]; then
                 _aftmp="$(mktemp)"
@@ -509,9 +610,9 @@ if [ "$PACT_ARGC" -eq 0 ] && [ "$INTERACTIVE_MODE" = false ] && [ "$CONFIG_LOADE
                 source "$_af"
             fi
         fi
-        read -p "  Custom Ansible playbook URL/path (blank to skip): " -r _cap
+        ask _cap "Custom Ansible playbook URL/path (blank to skip)" "" custom_playbook
         [ -n "$_cap" ] && CUSTOM_ANSIBLE_PLAYBOOK="$_cap"
-        read -p "  Custom Ansible varfile URL/path (blank to skip): " -r _cav
+        ask _cav "Custom Ansible varfile URL/path (blank to skip)" "" custom_varfile
         [ -n "$_cav" ] && CUSTOM_ANSIBLE_VARFILE="$_cav"
     else
         INTERACTIVE_MODE=true
@@ -522,92 +623,80 @@ fi
 # INTERACTIVE MODE
 #####################################################################################
 if [ "$INTERACTIVE_MODE" = true ]; then
-    echo "=== Interactive Mode ==="
-    echo ""
+    # No-op when the bootstrap gate above already drew it (tui_banner draws once).
+    tui_banner
 
     # Q1: Ask which images to build
-    echo "Select distros to create templates from:"
-    echo "  Available: all, debian, ubuntu, fedora, ${DISTRO_IDS[*]}"
+    tui_step "Choose your distros"
+    tui_info "Groups: ${C_BOLD}all${C_RESET}, ${C_BOLD}debian${C_RESET}, ${C_BOLD}ubuntu${C_RESET}, ${C_BOLD}fedora${C_RESET}"
+    tui_info "Individual: ${DISTRO_IDS[*]}"
 
     # Keep asking until valid input is provided
     BUILD_VALID=false
     while [ "$BUILD_VALID" = false ]; do
-        read -p "Enter comma-separated list (or 'all' for all distros) [Default: all]: " -r build_input
+        ask build_input "Distros to build (comma-separated)" "all" distros
         BUILD_DISTROS="${build_input:-all}"
         if SELECTED_DISTROS="$(expand_selected "$BUILD_DISTROS")"; then
             BUILD_VALID=true
         fi
     done
+    tui_ok "Selected: $SELECTED_DISTROS"
 
     # Q2: Ask about Cloud-Init customization (username/password/SSH key baked into templates)
-    echo ""
-    read -p "Customize Cloud-Init defaults (username/password/SSH key) baked into the templates? (Y/N) [Default: No]: " -r choice_cloudinit
-    if [[ "$choice_cloudinit" =~ ^[Yy]$ ]]; then
-        CUSTOMIZE_CLOUDINIT=true
+    tui_step "Cloud-Init defaults"
+    tui_note "Bake a default user, password, or SSH key into every template, instead of setting them per-VM in the Proxmox UI."
+    ask_yesno CUSTOMIZE_CLOUDINIT "Customize Cloud-Init defaults?" N cloudinit
+    if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
         prompt_cloudinit_values
     fi
 
     # Q3: Ask about Packer customization
-    echo ""
-    read -p "Do you want to customize the templates with Packer/Ansible? (Y/N) [Default: No]: " -r choice_packer
-    if [[ "$choice_packer" =~ ^[Yy]$ ]]; then
-        RUN_PACKER=true
-    fi
+    tui_step "Packer + Ansible customization"
+    tui_note "Optional second pass that provisions each template and saves it at VMID + 100."
+    ask_yesno RUN_PACKER "Customize the templates with Packer/Ansible?" N packer
 
     # Q4: Ask for Base VMID
-    echo ""
-    read -p "Base VMID (press Enter for default 800): " -r vmid_input
+    tui_step "VMID range"
+    ask vmid_input "Base VMID" "$VMID_BASE" vmid_base
     if [ -n "$vmid_input" ]; then
         VMID_BASE="$vmid_input"
     fi
 
     # Q5: Ask if Proxmox is remote (defaults to No when we're on a Proxmox host)
-    echo ""
+    tui_step "Where is Proxmox?"
     if [ "$ON_PROXMOX" = true ]; then
-        echo "This appears to be a Proxmox host, so local execution is the default."
-        read -p "Is the Proxmox server remote (build from here over SSH instead)? (Y/N) [Default: No]: " -r choice_remote
-        if [[ "$choice_remote" =~ ^[Yy]$ ]]; then
-            PROXMOX_IS_REMOTE=true
-        else
-            PROXMOX_IS_REMOTE=false
-        fi
+        tui_info "This looks like a Proxmox host, so local execution is the default."
+        ask_yesno PROXMOX_IS_REMOTE "Is the Proxmox server remote (build over SSH instead)?" N remote
     else
-        read -p "Is the Proxmox server remote? (Y/N) [Default: Yes]: " -r choice_remote
-        if [[ "$choice_remote" =~ ^[Nn]$ ]]; then
-            PROXMOX_IS_REMOTE=false
-        else
-            PROXMOX_IS_REMOTE=true
-        fi
+        ask_yesno PROXMOX_IS_REMOTE "Is the Proxmox server remote?" Y remote
     fi
 
     # Ask Proxmox settings only if remote
     if [ "$PROXMOX_IS_REMOTE" = true ]; then
-        echo ""
-        echo "Proxmox Configuration:"
+        tui_step "Proxmox connection"
 
-        read -p "Proxmox Hostname or IP Address (press Enter for default 'pve.local'): " -r proxmox_host_input
+        ask proxmox_host_input "Proxmox hostname or IP address" "$PROXMOX_HOST" proxmox_host
         if [ -n "$proxmox_host_input" ]; then
             PROXMOX_HOST="$proxmox_host_input"
         fi
 
-        read -p "SSH Username (press Enter for default 'root'): " -r ssh_user_input
+        ask ssh_user_input "SSH username" "$PROXMOX_SSH_USER" ssh_user
         if [ -n "$ssh_user_input" ]; then
             PROXMOX_SSH_USER="$ssh_user_input"
         fi
 
-        read -p "SSH Privatekey Path (leave blank for password authentication): " -r ssh_key_input
+        ask ssh_key_input "SSH private key path (blank for password auth)" "" ssh_key
         if [ -n "$ssh_key_input" ]; then
             SSH_PRIVATE_KEY_PATH="$ssh_key_input"
         else
             # Ask for SSH password if not using key
-            read -sp "SSH Password: " -r PROXMOX_SSH_PASSWORD
-            echo ""
+            ask_secret PROXMOX_SSH_PASSWORD "SSH password for $PROXMOX_SSH_USER@$PROXMOX_HOST" ssh_password
         fi
     fi
 
     # Ask for storage pool (for both remote and local)
-    echo ""
-    read -p "Proxmox Storage Pool (press Enter for default 'local-lvm'): " -r storage_input
+    tui_step "Storage pool"
+    ask storage_input "Proxmox storage pool" "$PROXMOX_STORAGE" storage
     if [ -n "$storage_input" ]; then
         PROXMOX_STORAGE="$storage_input"
     fi
@@ -628,59 +717,58 @@ if [ "$INTERACTIVE_MODE" = true ]; then
         fi
     done
 
-    # Display VMID information
-    echo ""
-    echo "VMIDs that will be created:"
+    # Display VMID information as a panel, one row per distro.
+    _vmid_rows=()
+    for distro_id in "${DISTRO_IDS[@]}"; do
+        [[ " $SELECTED_DISTROS " == *" $distro_id "* ]] || continue
+        offset="${DISTRO_OFFSET[$distro_id]}"
+        if [ "$RUN_PACKER" = true ]; then
+            _vmid_rows+=("$(printf '%-18s %s%-6s%s -> Packer %s%s%s' \
+                "${DISTRO_NAME[$distro_id]}" \
+                "$C_DIM" "$((VMID_BASE + offset))*" "$C_RESET" \
+                "$C_BOLD" "$((VMID_BASE + 100 + offset))" "$C_RESET")")
+        else
+            _vmid_rows+=("$(printf '%-18s %s%s%s' \
+                "${DISTRO_NAME[$distro_id]}" "$C_BOLD" "$((VMID_BASE + offset))" "$C_RESET")")
+        fi
+    done
     if [ "$RUN_PACKER" = true ]; then
-        # Display base templates with asterisk
-        base_vmids_display=""
-        for vmid in "${SELECTED_VMIDS[@]}"; do
-            if [ -z "$base_vmids_display" ]; then
-                base_vmids_display="${vmid}*"
-            else
-                base_vmids_display="$base_vmids_display ${vmid}*"
-            fi
-        done
-        echo "  Base templates: $base_vmids_display ${PACKER_VMIDS[*]}"
-        echo "  * VMs will be created temporarily during the provisioning process"
-    else
-        echo "  Base templates: ${SELECTED_VMIDS[*]}"
+        _vmid_rows+=("")
+        _vmid_rows+=("${C_DIM}* built temporarily, then removed during provisioning${C_RESET}")
     fi
+    tui_panel "VMIDs that will be created" "${_vmid_rows[@]}"
 
     # Ask about rebuild with VMID information displayed
-    echo ""
-    read -p "Delete existing VMs before building (rebuild-templates)? (Y/N) [Default: No]: " -r choice_rebuild
-    if [[ "$choice_rebuild" =~ ^[Yy]$ ]]; then
-        REBUILD_TEMPLATES=true
-    fi
+    tui_step "Existing VMs"
+    tui_warn "Rebuilding DELETES any VM already using the VMIDs above."
+    ask_yesno REBUILD_TEMPLATES "Delete existing VMs before building?" N rebuild
 
     # If Packer is enabled, ask for Packer configuration
     if [ "$RUN_PACKER" = true ]; then
-        echo ""
-        echo "Packer Configuration:"
+        tui_step "Proxmox API token (for Packer)"
+        tui_note "Create one in the Proxmox UI: Datacenter -> Permissions -> API Tokens."
 
         # Prompt for Packer Token ID only if not provided via CLI
         while [ -z "$PACKER_TOKEN_ID" ]; do
-            read -p "Proxmox API Token ID (required): " -r packer_token_id_input
+            ask packer_token_id_input "Proxmox API token ID (e.g. root@pam!packer)" "" token_id
             if [ -n "$packer_token_id_input" ]; then
                 PACKER_TOKEN_ID="$packer_token_id_input"
             else
-                echo "Error: Proxmox API Token ID is required when using Packer"
+                tui_warn "The API token ID is required when using Packer."
             fi
         done
 
         # Prompt for Packer Token Secret only if not provided via CLI
         while [ -z "$PACKER_TOKEN_SECRET" ]; do
-            read -sp "Proxmox API Token Secret (required): " -r packer_token_secret_input
-            echo ""
+            ask_secret packer_token_secret_input "Proxmox API token secret" token_secret
             if [ -n "$packer_token_secret_input" ]; then
                 PACKER_TOKEN_SECRET="$packer_token_secret_input"
             else
-                echo "Error: Proxmox API Token Secret is required when using Packer"
+                tui_warn "The API token secret is required when using Packer."
             fi
         done
 
-        read -p "Proxmox Target Node (press Enter for default 'pve'): " -r proxmox_target_node_input
+        ask proxmox_target_node_input "Proxmox target node" "${PROXMOX_TARGET_NODE:-pve}" target_node
         if [ -n "$proxmox_target_node_input" ]; then
             PROXMOX_TARGET_NODE="$proxmox_target_node_input"
         fi
@@ -688,13 +776,13 @@ if [ "$INTERACTIVE_MODE" = true ]; then
         # Ansible/Packer customization files. Each accepts a local path OR a URL
         # (e.g. a GitLab/GitHub raw link); press Enter to use the built-in defaults.
         # This is asked in both remote (SSH) and local modes.
-        echo ""
-        echo "Customization files (press Enter for the built-in defaults):"
-        read -p "  Custom Ansible playbook (local path or URL): " -r ansible_playbook_input
+        tui_step "Your own playbook and template"
+        tui_note "Each takes a local path or a URL. Leave blank for the built-in defaults."
+        ask ansible_playbook_input "Custom Ansible playbook" "" custom_playbook
         [ -n "$ansible_playbook_input" ] && CUSTOM_ANSIBLE_PLAYBOOK="$ansible_playbook_input"
-        read -p "  Custom Ansible variables file (local path or URL): " -r ansible_varfile_input
+        ask ansible_varfile_input "Custom Ansible variables file" "" custom_varfile
         [ -n "$ansible_varfile_input" ] && CUSTOM_ANSIBLE_VARFILE="$ansible_varfile_input"
-        read -p "  Custom Packer template (local path or URL): " -r packerfile_input
+        ask packerfile_input "Custom Packer template" "" custom_packerfile
         [ -n "$packerfile_input" ] && CUSTOM_PACKERFILE="$packerfile_input"
     fi
 
@@ -706,20 +794,19 @@ fi
 # without a terminal the validation below fails with a clear message instead.
 if [ "$INTERACTIVE_MODE" = false ]; then
     if [ -z "$BUILD_DISTROS" ] && [ -t 0 ]; then
-        read -p "Which distros to build? (all, debian, ubuntu, fedora, or e.g. debian12,ubuntu2404) [all]: " -r _bd
+        ask _bd "Which distros to build? (all, a family, or e.g. debian12,ubuntu2404)" "all" distros
         BUILD_DISTROS="${_bd:-all}"
     fi
     if [ "$DRY_RUN" = false ] && [ "$PROXMOX_IS_REMOTE" = true ] && [ -z "$SSH_PRIVATE_KEY_PATH" ] && [ -z "${PROXMOX_SSH_PASSWORD:-}" ] && [ -t 0 ]; then
-        read -sp "SSH password for $PROXMOX_SSH_USER@$PROXMOX_HOST: " -r PROXMOX_SSH_PASSWORD
-        echo ""
+        ask_secret PROXMOX_SSH_PASSWORD "SSH password for $PROXMOX_SSH_USER@$PROXMOX_HOST" ssh_password
     fi
     if [ "$RUN_PACKER" = true ] && [ "$DRY_RUN" = false ] && [ -t 0 ]; then
-        [ -z "$PACKER_TOKEN_ID" ]     && read -p  "Proxmox API Token ID (for Packer): " -r PACKER_TOKEN_ID
-        [ -z "$PACKER_TOKEN_SECRET" ] && { read -sp "Proxmox API Token Secret (for Packer): " -r PACKER_TOKEN_SECRET; echo ""; }
+        [ -z "$PACKER_TOKEN_ID" ]     && ask PACKER_TOKEN_ID "Proxmox API token ID (for Packer)" "" token_id
+        [ -z "$PACKER_TOKEN_SECRET" ] && ask_secret PACKER_TOKEN_SECRET "Proxmox API token secret (for Packer)" token_secret
     fi
     if [ "$CUSTOMIZE_CLOUDINIT" = true ] && [ -z "$CLOUDINIT_USER" ] && [ -z "$CLOUDINIT_PASSWORD" ] && [ -z "$CLOUDINIT_SSH_KEYS" ] && [ "$DRY_RUN" = false ] && [ -t 0 ]; then
-        echo ""
-        echo "Cloud-Init customization is enabled (--customize-cloudinit) but no values were provided."
+        tui_step "Cloud-Init defaults"
+        tui_note "--customize-cloudinit is set but no values were provided."
         prompt_cloudinit_values
     fi
 fi
@@ -772,27 +859,30 @@ fi
 if [ "$ON_PROXMOX" = true ] && [ "$PROXMOX_IS_REMOTE" = false ]; then
     echo "Note: detected a Proxmox host - executing locally (no SSH)."
 fi
-echo "Build Configuration:"
-echo "  Proxmox Host: $PROXMOX_HOST"
-echo "  Proxmox SSH User: $PROXMOX_SSH_USER"
-echo "  Proxmox Is Remote: $PROXMOX_IS_REMOTE"
-echo "  Storage Pool: $PROXMOX_STORAGE"
-echo "  Base VMID: $VMID_BASE"
-echo "  Selected Distros: $SELECTED_DISTROS"
-echo "  Run Packer: $RUN_PACKER"
-echo "  Rebuild Templates: $REBUILD_TEMPLATES"
+# Build the summary as panel rows. Secrets are reported as "(set)" only - the
+# password and key material themselves are never printed.
+_summary_rows=()
+_summary_row() { _summary_rows+=("$(printf '%-24s %s' "$1" "$2")"); }
+_summary_row "Proxmox host" "$PROXMOX_HOST"
+_summary_row "Proxmox SSH user" "$PROXMOX_SSH_USER"
+_summary_row "Proxmox is remote" "$PROXMOX_IS_REMOTE"
+_summary_row "Storage pool" "$PROXMOX_STORAGE"
+_summary_row "Base VMID" "$VMID_BASE"
+_summary_row "Selected distros" "$SELECTED_DISTROS"
+_summary_row "Run Packer" "$RUN_PACKER"
+_summary_row "Rebuild templates" "$REBUILD_TEMPLATES"
 if [ "$RUN_PACKER" = true ]; then
-    [ -n "$CUSTOM_PACKERFILE" ]       && echo "  Custom Packer template: $CUSTOM_PACKERFILE"
-    [ -n "$CUSTOM_ANSIBLE_PLAYBOOK" ] && echo "  Custom Ansible playbook: $CUSTOM_ANSIBLE_PLAYBOOK"
-    [ -n "$CUSTOM_ANSIBLE_VARFILE" ]  && echo "  Custom Ansible varfile: $CUSTOM_ANSIBLE_VARFILE"
+    [ -n "$CUSTOM_PACKERFILE" ]       && _summary_row "Custom Packer template" "$CUSTOM_PACKERFILE"
+    [ -n "$CUSTOM_ANSIBLE_PLAYBOOK" ] && _summary_row "Custom Ansible playbook" "$CUSTOM_ANSIBLE_PLAYBOOK"
+    [ -n "$CUSTOM_ANSIBLE_VARFILE" ]  && _summary_row "Custom Ansible varfile" "$CUSTOM_ANSIBLE_VARFILE"
 fi
-echo "  Customize Cloud-Init: $CUSTOMIZE_CLOUDINIT"
+_summary_row "Customize Cloud-Init" "$CUSTOMIZE_CLOUDINIT"
 if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
-    # Never print the password or key material itself - only whether they're set.
-    [ -n "$CLOUDINIT_USER" ]     && echo "    Cloud-Init user: $CLOUDINIT_USER"
-    [ -n "$CLOUDINIT_PASSWORD" ] && echo "    Cloud-Init password: (set)"
-    [ -n "$CLOUDINIT_SSH_KEYS" ] && echo "    Cloud-Init SSH key(s): (set)"
+    [ -n "$CLOUDINIT_USER" ]     && _summary_row "  Cloud-Init user" "$CLOUDINIT_USER"
+    [ -n "$CLOUDINIT_PASSWORD" ] && _summary_row "  Cloud-Init password" "(set)"
+    [ -n "$CLOUDINIT_SSH_KEYS" ] && _summary_row "  Cloud-Init SSH key(s)" "(set)"
 fi
+tui_panel "Build Configuration" "${_summary_rows[@]}"
 echo ""
 
 # --dry-run: show the resolved plan and exit before doing anything.
@@ -978,6 +1068,53 @@ install_pkgs() {
     esac || { echo "Error: failed to install: ${missing[*]}" >&2; return 1; }
 }
 
+# Report a key created by generate_ssh_key, and do the deferred .ppk conversion (deferred
+# so install_pkgs is available for putty-tools). Called at the very end of the run so the
+# paths are the last thing on screen instead of being buried under the build output.
+report_generated_key() {
+    [ -z "$GENERATED_KEY_PATH" ] && return 0
+
+    if [ "$WANT_PPK" = true ]; then
+        if ! command -v puttygen &>/dev/null; then
+            echo "Installing putty-tools for the .ppk conversion ..."
+            install_pkgs putty-tools >/dev/null 2>&1 || true
+        fi
+        if command -v puttygen &>/dev/null; then
+            if puttygen "$GENERATED_KEY_PATH" -O private -o "$GENERATED_KEY_PATH.ppk" 2>/dev/null; then
+                chmod 600 "$GENERATED_KEY_PATH.ppk"
+                GENERATED_PPK_PATH="$GENERATED_KEY_PATH.ppk"
+            else
+                echo "Warning: puttygen could not convert the key; skipping the .ppk file." >&2
+            fi
+        else
+            echo "Warning: puttygen unavailable (install putty-tools); skipping the .ppk file." >&2
+        fi
+    fi
+
+    echo ""
+    echo "=== SSH key for Cloud-Init ==="
+    echo "  Private key : $GENERATED_KEY_PATH"
+    echo "  Public key  : $GENERATED_KEY_PATH.pub"
+    [ -n "$GENERATED_PPK_PATH" ] && echo "  PuTTY key   : $GENERATED_PPK_PATH"
+    # Kept in a variable rather than inline: a ${VAR:-default} containing an apostrophe
+    # inside a double-quoted string is a bash quoting trap.
+    local login_user="$CLOUDINIT_USER"
+    [ -z "$login_user" ] && login_user="<image default user>"
+
+    echo ""
+    echo "  The public key is baked into the templates. Once a VM cloned from one has an IP:"
+    echo "    ssh -i $GENERATED_KEY_PATH $login_user@<vm-ip>"
+    echo ""
+    echo "  Keep the private key safe - anything cloned from these templates trusts it."
+
+    if [ "$PRINT_PRIVATE_KEY" = true ]; then
+        echo ""
+        echo "  Private key follows. It stays in this terminal scrollback:"
+        echo ""
+        cat "$GENERATED_KEY_PATH"
+    fi
+}
+
 # Warn (and, on a TTY, confirm) before installing tooling on what looks like a Proxmox host.
 warn_local_install() {
     [ "$ON_PROXMOX" != true ] && return 0
@@ -1031,7 +1168,7 @@ fi
 if [ "$RUN_PACKER" = true ]; then
     # Keep this in sync with .github/workflows/ci.yml (the setup-packer version) so the
     # template is built with the same Packer that CI validates it against.
-    PACKER_VERSION="1.11.2"
+    PACKER_VERSION="1.16.0"
     if ! command -v packer &> /dev/null; then
         echo "Packer is not installed. Installing Packer ${PACKER_VERSION}..."
         packer_zip="packer_${PACKER_VERSION}_linux_amd64.zip"
@@ -1067,31 +1204,39 @@ if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
     CI_SSHKEYS_B64="$(printf '%s' "$CLOUDINIT_SSH_KEYS" | base64 | tr -d '\n')"
 fi
 
+# Arguments for proxmox.sh. Built once here rather than per-branch: remote and local mode
+# pass an identical argument list (they differ only in how the script is delivered and
+# invoked), so keeping a single copy means a new flag can't be added to one path and
+# silently forgotten on the other.
+PROXMOX_SCRIPT_ARGS=("--vmid-base=$VMID_BASE" "--proxmox-storage=$PROXMOX_STORAGE")
+
+# Add rebuild flag if enabled
+if [ "$REBUILD_TEMPLATES" = true ]; then
+    PROXMOX_SCRIPT_ARGS+=("--rebuild-templates")
+fi
+
+# Add run-packer flag if Packer will be run
+if [ "$RUN_PACKER" = true ]; then
+    PROXMOX_SCRIPT_ARGS+=("--run-packer")
+fi
+
+# Add customize-cloudinit flag if enabled (values travel via the PACT_CI_*_B64 env vars)
+if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
+    PROXMOX_SCRIPT_ARGS+=("--customize-cloudinit")
+fi
+
+# Image checksum verification is on by default in proxmox.sh; only pass the opt-out.
+if [ "$SKIP_CHECKSUM_VERIFY" = true ]; then
+    PROXMOX_SCRIPT_ARGS+=("--skip-checksum-verify")
+fi
+
+# Add build list to arguments
+if [ -n "$BUILD_DISTROS" ]; then
+    PROXMOX_SCRIPT_ARGS+=("--build=$BUILD_DISTROS")
+fi
+
 # Run proxmox.sh to create templates (SSH to remote or run locally)
 if [ "$PROXMOX_IS_REMOTE" = true ]; then
-    # Build proxmox.sh arguments based on configuration
-    PROXMOX_SCRIPT_ARGS=("--vmid-base=$VMID_BASE" "--proxmox-storage=$PROXMOX_STORAGE")
-
-    # Add rebuild flag if enabled
-    if [ "$REBUILD_TEMPLATES" = true ]; then
-        PROXMOX_SCRIPT_ARGS+=("--rebuild-templates")
-    fi
-
-    # Add run-packer flag if Packer will be run
-    if [ "$RUN_PACKER" = true ]; then
-        PROXMOX_SCRIPT_ARGS+=("--run-packer")
-    fi
-
-    # Add customize-cloudinit flag if enabled (values travel via PACT_CI_*_B64 env vars below)
-    if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
-        PROXMOX_SCRIPT_ARGS+=("--customize-cloudinit")
-    fi
-
-    # Add build list to arguments
-    if [ -n "$BUILD_DISTROS" ]; then
-        PROXMOX_SCRIPT_ARGS+=("--build=$BUILD_DISTROS")
-    fi
-
     # Verify the private key file exists when key auth is requested.
     if [ -n "$SSH_PRIVATE_KEY_PATH" ]; then
         if [ ! -f "$SSH_PRIVATE_KEY_PATH" ]; then
@@ -1130,27 +1275,6 @@ EOF
 else
     # Run proxmox.sh locally
     echo "Running proxmox.sh locally..."
-
-    # Build proxmox.sh arguments
-    PROXMOX_SCRIPT_ARGS=("--vmid-base=$VMID_BASE" "--proxmox-storage=$PROXMOX_STORAGE")
-
-    if [ "$REBUILD_TEMPLATES" = true ]; then
-        PROXMOX_SCRIPT_ARGS+=("--rebuild-templates")
-    fi
-
-    if [ "$RUN_PACKER" = true ]; then
-        PROXMOX_SCRIPT_ARGS+=("--run-packer")
-    fi
-
-    # Add customize-cloudinit flag if enabled (values travel via PACT_CI_*_B64 env vars below)
-    if [ "$CUSTOMIZE_CLOUDINIT" = true ]; then
-        PROXMOX_SCRIPT_ARGS+=("--customize-cloudinit")
-    fi
-
-    # Add build list to arguments
-    if [ -n "$BUILD_DISTROS" ]; then
-        PROXMOX_SCRIPT_ARGS+=("--build=$BUILD_DISTROS")
-    fi
 
     # Create unique local working directory and run
     mkdir -p "./$WORK_DIR_NAME"
@@ -1209,3 +1333,5 @@ fi
 echo ""
 echo "=== Build Complete ==="
 echo "Template build process finished successfully!"
+
+report_generated_key

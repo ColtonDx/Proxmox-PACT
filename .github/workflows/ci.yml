@@ -15,7 +15,7 @@ jobs:
     name: ShellCheck (bash scripts)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run ShellCheck
         # shellcheck is preinstalled on GitHub-hosted runners and reads .shellcheckrc
         run: shellcheck Scripts/*.sh
@@ -24,10 +24,10 @@ jobs:
     name: Packer (fmt + validate)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: hashicorp/setup-packer@main
         with:
-          version: 1.11.2
+          version: 1.16.0
       - name: packer fmt -check
         run: packer fmt -check -diff Packer/Templates/universal.pkr.hcl
       - name: packer init
@@ -55,8 +55,8 @@ jobs:
     name: Ansible / YAML lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.x'
       - name: Install linters

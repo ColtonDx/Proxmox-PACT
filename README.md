@@ -33,6 +33,38 @@ Use `bash <(curl …)`, not `curl … | bash`, so the prompts work. You can run 
 any Linux machine or directly on the Proxmox host — SSH vs. local is handled
 automatically.
 
+## The guided installer
+
+Interactive mode is a guided, step-by-step interview in your terminal. Every
+question shows its default in `[brackets]` — press Enter to take it.
+
+**Stuck on a question? Answer `?` and a penguin explains it:**
+
+```
+  Base VMID [800]  [? for help]
+  > ?
+
+            ╭──────────────────────────────────────────────────────────────╮
+   .--.     │ Every VM in Proxmox has a numeric ID, and PACT assigns them  │
+  |o_o |    │ by adding a fixed offset to this base. With the default base │
+  |:_/ |    │ of 800 you get Debian 12 at 802 and Ubuntu 24.04 at 811.     │
+ //   \ \   │ Change it if 800-830 is already occupied on your cluster —   │
+(|     | )  │ pick a free block, for example 700 or 900. It must be a      │
+/'\_   _/`\ │ plain number and needs enough room above it for every        │
+\___)=(___/ │ distro you selected.                                         │
+            ╰──────────────────────────────────────────────────────────────╯
+```
+
+The penguin covers every prompt — distro selection, Cloud-Init, VMIDs, SSH,
+storage pools, API tokens, and custom playbooks — so you never have to leave
+the installer to look something up. The explanations live in
+[`Scripts/tui.sh`](Scripts/tui.sh).
+
+Prefer it plain? `--no-tui` (or `PACT_NO_TUI=1`, or `NO_COLOR`) drops the colors,
+boxes, and penguin while keeping the same questions and the same `?` help. The
+decoration is also skipped automatically when output is not a terminal, so piped
+logs stay clean.
+
 ## How it works
 
 1. **`build.sh`** (your machine or the Proxmox host) collects settings from CLI
@@ -50,7 +82,8 @@ automatically.
 
 | Common flag | Meaning |
 |-------------|---------|
-| `--interactive` | Prompt for everything (can't be mixed with other flags) |
+| `--interactive` | Guided interview; answer `?` at any prompt for an explanation |
+| `--no-tui` | Plain prompts — no colors, boxes, or penguin (may accompany `--interactive`) |
 | `--local` | Run on the Proxmox host, no SSH |
 | `--proxmox-host=HOST` | Proxmox hostname or IP (default `pve.local`) |
 | `--proxmox-ssh-user=USER` | SSH user (default `root`) |
@@ -62,6 +95,21 @@ automatically.
 | `--dry-run` | Print the plan and exit — no host or credentials needed |
 
 Full flag list and answerfile settings: **[CLI Reference](../../wiki/CLI-Reference)**.
+
+## Image verification
+
+Every cloud image is checked against the checksum its distro publishes before anything
+else happens to it — the verification runs *before* `virt-customize` touches the image
+and before it is imported into Proxmox storage, so a corrupt or tampered download can
+never become a template. On a mismatch the build stops and the image is deleted.
+
+This is on by default and needs no configuration. PACT tracks the checksum file for each
+distro alongside its image URL and handles the three published formats (Debian
+`SHA512SUMS`, Ubuntu `SHA256SUMS`, Fedora `*-CHECKSUM`).
+
+If a mirror's checksum file is temporarily unreachable and you need to build anyway,
+`--skip-checksum-verify` (or `SKIP_CHECKSUM_VERIFY=true`) opts out for that run and logs
+a warning. Only reach for it when you have to.
 
 ## Cloud-Init customization
 
@@ -84,6 +132,29 @@ distro you build) and can be combined with any of the standard config methods: C
 flags, `PACT_CUSTOMIZE_CLOUDINIT` / `PACT_CLOUDINIT_*` env vars, or the `.env.local`
 answerfile.
 
+### Don't have an SSH key yet?
+
+When prompted for the SSH key, the first option generates one for you:
+
+```
+  SSH public key for the Cloud-Init user:
+    1) Generate a new key pair for me
+    2) Read one from a file (use this for multiple keys)
+    3) Paste a single key
+    4) Skip - don't set an SSH key
+```
+
+Option 1 creates an ed25519 pair (default `~/.ssh/pact-<timestamp>`, no passphrase, so
+first login is unattended) and injects the public half into every template it builds. It
+will not overwrite an existing file. You can also ask for a **PuTTY `.ppk`** for
+PuTTY/WinSCP on Windows — needs `puttygen` (`putty-tools`), which it offers to install,
+and produces a PPK v3 file readable by PuTTY 0.75 and newer.
+
+When the build finishes, the key paths are printed last, along with the exact `ssh -i`
+command to log in. You can optionally have the private key itself printed to the
+terminal — handy when you're building on a remote box, but it does leave the key in your
+scrollback, so it's off by default.
+
 ## Examples
 
 Copy-paste configs, one-liners, answerfiles, and a sample playbook live in
@@ -97,13 +168,18 @@ Copy-paste configs, one-liners, answerfiles, and a sample playbook live in
 
 | Distro | Base VMID | Distro | Base VMID |
 |--------|----------:|--------|----------:|
-| Debian 11 | 801 | Ubuntu 24.04 | 812 |
 | Debian 12 | 802 | Ubuntu 26.04 | 814 |
 | Debian 13 | 803 | Fedora 43 | 823 |
 | Ubuntu 22.04 | 811 | Fedora 44 | 824 |
+| Ubuntu 24.04 | 812 | | |
 
 VMIDs are `base + offset` (default base `800`). With Packer, customized
 templates get `base + 100 + offset` (e.g. Debian 12 → 902).
+
+> Debian 11 was removed ahead of its end of life on 31 August 2026. VMID 801 is
+> now unused; every other VMID is unchanged, so existing templates keep their IDs.
+> If you have `debian11` in an answerfile or `--build-distros`, drop it — the
+> build will otherwise stop with an unknown-distro error.
 
 ## Testing
 

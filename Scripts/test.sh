@@ -230,7 +230,7 @@ expand_selected() {
     for token in ${spec//,/ }; do
         local matched=false
         for id in "${DISTRO_IDS[@]}"; do
-            # Exact id, or a group/prefix match (e.g. "debian" -> debian11/12/13)
+            # Exact id, or a group/prefix match (e.g. "debian" -> debian12/13)
             if [ "$id" = "$token" ] || [[ "$id" == "$token"* ]]; then
                 out="$out $id"; matched=true
             fi
