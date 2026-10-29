@@ -41,7 +41,7 @@ own host, user, credentials, and storage pool. See the
 
 Valid values: `all`, a family (`debian`, `ubuntu`, `fedora`), or a
 comma-separated list of `debian12 debian13 ubuntu2204 ubuntu2404 ubuntu2604
-fedora43 fedora44`.
+ubuntu2610 fedora43 fedora44`.
 
 ## Packer customization
 

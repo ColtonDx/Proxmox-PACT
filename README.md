@@ -169,9 +169,9 @@ Copy-paste configs, one-liners, answerfiles, and a sample playbook live in
 | Distro | Base VMID | Distro | Base VMID |
 |--------|----------:|--------|----------:|
 | Debian 12 | 802 | Ubuntu 26.04 | 814 |
-| Debian 13 | 803 | Fedora 43 | 823 |
-| Ubuntu 22.04 | 811 | Fedora 44 | 824 |
-| Ubuntu 24.04 | 812 | | |
+| Debian 13 | 803 | Ubuntu 26.10 | 815 |
+| Ubuntu 22.04 | 811 | Fedora 43 | 823 |
+| Ubuntu 24.04 | 812 | Fedora 44 | 824 |
 
 VMIDs are `base + offset` (default base `800`). With Packer, customized
 templates get `base + 100 + offset` (e.g. Debian 12 → 902).
@@ -180,6 +180,11 @@ templates get `base + 100 + offset` (e.g. Debian 12 → 902).
 > now unused; every other VMID is unchanged, so existing templates keep their IDs.
 > If you have `debian11` in an answerfile or `--build-distros`, drop it — the
 > build will otherwise stop with an unknown-distro error.
+
+Ubuntu 26.10 is an interim release, supported until July 2027 — pick 26.04 LTS
+for anything long-lived. New releases can be pre-staged ahead of their upstream
+date via `STAGED_DISTRO_IDS` in `Scripts/proxmox.sh`: a staged id is left out of
+`all` and the family groups and is only built when named explicitly.
 
 ## Testing
 
