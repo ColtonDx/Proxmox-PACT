@@ -100,11 +100,12 @@ PACT_ARGC=$#
 # Directory containing this script (empty when curl-piped via process substitution).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
 
-# Base URL for fetching companion files (proxmox.sh, tui.sh, the Packer template, the
-# Ansible files) when build.sh is run standalone (curl-piped) instead of from a clone.
-# PACT_REF points at this branch until it merges, because Scripts/tui.sh does not exist
-# on main yet; set it back to main once merged. Both are overridable via the environment.
-PACT_REF="${PACT_REF:-feature/tui-guided-installer}"
+# Where companion files (proxmox.sh, tui.sh, the Packer template, the Ansible files) are
+# fetched from when build.sh is run standalone (curl-piped) instead of from a clone.
+# PACT_REF is the git ref (branch, tag or commit) to fetch from, and PACT_BASE_URL is the
+# full base URL built from it. Both can be overridden via the environment, e.g.
+# PACT_REF=my-branch to test a branch, or PACT_BASE_URL to use a fork or mirror.
+PACT_REF="${PACT_REF:-main}"
 PACT_BASE_URL="${PACT_BASE_URL:-https://raw.githubusercontent.com/ColtonDx/Proxmox-PACT/$PACT_REF}"
 
 # Cleanup for URL-download temp files and the bootstrap working tree (single EXIT trap;
