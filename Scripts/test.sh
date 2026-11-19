@@ -167,7 +167,7 @@ log_section() { echo ""; echo "${C_BOLD}${C_BLUE}=== $* ===${C_RESET}"; }
 log_info()    { echo "  $*"; }
 log_pass()    { echo "  ${C_GREEN}PASS${C_RESET} $*"; PASS_COUNT=$((PASS_COUNT + 1)); }
 log_fail()    { echo "  ${C_RED}FAIL${C_RESET} $*"; FAIL_COUNT=$((FAIL_COUNT + 1)); FAILURES+=("$*"); }
-# shellcheck disable=SC2317  # only called from the EXIT-trap cleanup
+# shellcheck disable=SC2317,SC2329  # only called from the EXIT-trap handler cleanup_all
 log_warn()    { echo "  ${C_YELLOW}WARN${C_RESET} $*"; }
 
 #####################################################################################
@@ -291,8 +291,8 @@ destroy_vmid() {
     pve_exec "for i in 1 2 3 4 5; do qm destroy $vmid --purge 1 --skiplock 1 >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1" >/dev/null 2>&1
 }
 
-# Runs via the EXIT trap (shellcheck can't see the indirect invocation).
-# shellcheck disable=SC2317
+# Invoked via the EXIT trap below, which shellcheck cannot see as a call.
+# shellcheck disable=SC2317,SC2329
 cleanup_all() {
     [ "$KEEP_RESOURCES" = true ] && { echo ""; log_warn "--keep set: leaving ${#CREATED_VMIDS[@]} VMID(s) in place: ${CREATED_VMIDS[*]}"; return; }
     [ "${#CREATED_VMIDS[@]}" -eq 0 ] && return
