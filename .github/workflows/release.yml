@@ -1,0 +1,76 @@
+name: Release
+
+# Every push to main (i.e. every merged PR) that passes CI becomes a dated
+# GitHub release: vYY.MM.DD, or vYY.MM.DD.N for further releases the same day.
+# Assets:
+#   build.sh                        - build.sh pinned to this release (PACT_REF defaults to the tag)
+#   proxmox-pact-<tag>.tar.gz       - the full repository at this release
+#   SHA256SUMS
+on:
+  push:
+    branches: [main]
+
+# Serialize releases so two merges can't claim the same tag.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: CI checks
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: Package and publish release
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Pick release tag
+        id: tag
+        run: |
+          base="v$(date -u +%y.%m.%d)"
+          tag="$base"
+          n=1
+          while git ls-remote --exit-code --tags origin "refs/tags/${tag}" > /dev/null; do
+            n=$((n + 1))
+            tag="${base}.${n}"
+          done
+          echo "Release tag: ${tag}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir dist
+          git archive --format=tar.gz --prefix="Proxmox-PACT-${TAG}/" \
+            -o "dist/proxmox-pact-${TAG}.tar.gz" HEAD
+          # Pin the standalone build.sh to this release so its companion files
+          # are fetched from the tag instead of main.
+          sed "s|^PACT_REF=\"\${PACT_REF:-main}\"\$|PACT_REF=\"\${PACT_REF:-${TAG}}\"|" \
+            Scripts/build.sh > dist/build.sh
+          if ! grep -qF "PACT_REF=\"\${PACT_REF:-${TAG}}\"" dist/build.sh; then
+            echo "::error::Could not pin PACT_REF in build.sh"
+            exit 1
+          fi
+          bash -n dist/build.sh
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "${TAG} | Proxmox-PACT" \
+            --generate-notes
